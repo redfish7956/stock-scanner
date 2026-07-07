@@ -68,31 +68,123 @@ latest_df['漲跌幅(%)'] = latest_df.apply(format_change, axis=1)
 
 # ==========================================
 # 4. 左側邊欄 (Sidebar) - 條件篩選器
+# 備註：使用垂直排版避免複製貼上時因單行過長導致截斷
 # ==========================================
 st.sidebar.header("📊 條件篩選器")
 
 # --- 基礎濾網 ---
-use_cond_no_etf = st.sidebar.checkbox("🚫 排除 ETF (00開頭)", value=False, help="邏輯：剔除代號為 00、01、02 開頭的 ETF 與基金標的。")
-use_cond_no_pref = st.sidebar.checkbox("🚫 排除特別股 (含字母)", value=False, help="邏輯：剔除代號中含有英文字母的特別股或憑證 (如 2881A)。")
+use_cond_no_etf = st.sidebar.checkbox(
+    "🚫 排除 ETF (00開頭)", 
+    value=False, 
+    help="邏輯：剔除代號為 00、01、02 開頭的 ETF 與基金標的。"
+)
+use_cond_no_pref = st.sidebar.checkbox(
+    "🚫 排除特別股 (含字母)", 
+    value=False, 
+    help="邏輯：剔除代號中含有英文字母的特別股或憑證 (如 2881A)。"
+)
 st.sidebar.markdown("---")
 
 # --- 進階條件 ---
-use_cond1 = st.sidebar.checkbox("1. 連續 N 日成交量 >= M 張", help="邏輯：由最新交易日往前推算 N 日（包含今日），這 N 天的「每日」成交量皆大於或等於設定張數。")
+use_cond1 = st.sidebar.checkbox(
+    "1. 連續 N 日成交量 >= M 張", 
+    help="邏輯：由最新交易日往前推算 N 日（包含今日），這 N 天的「每日」成交量皆大於或等於設定張數。"
+)
 col1, col2 = st.sidebar.columns(2)
-cond1_days = col1.number_input("連續日數 (N)", min_value=1, value=5, step=1, disabled=not use_cond1, key='c1_d')
-cond1_vol = col2.number_input("最低張數 (M)", min_value=0, value=500, step=100, disabled=not use_cond1, key='c1_v')
+cond1_days = col1.number_input(
+    "連續日數 (N)", 
+    min_value=1, value=5, step=1, 
+    disabled=not use_cond1, key='c1_d'
+)
+cond1_vol = col2.number_input(
+    "最低張數 (M)", 
+    min_value=0, value=500, step=100, 
+    disabled=not use_cond1, key='c1_v'
+)
 
-use_cond2 = st.sidebar.checkbox("2. 成交量 > 前 N 日均量的 M 倍", help="邏輯：今日成交量 > (前 N 日總成交量 / N) * M 倍。注意：均量計算「不包含」今日，以避免今日爆量拉高均值。")
+use_cond2 = st.sidebar.checkbox(
+    "2. 成交量 > 前 N 日均量的 M 倍", 
+    help="邏輯：今日成交量 > (前 N 日總成交量 / N) * M 倍。注意：均量計算「不包含」今日，以避免今日爆量拉高均值。"
+)
 col1, col2 = st.sidebar.columns(2)
-cond2_days = col1.number_input("前 N 日均量", min_value=1, value=5, step=1, disabled=not use_cond2, key='c2_d')
-cond2_multi = col2.number_input("突破倍數 (M)", min_value=1.0, value=2.0, step=0.5, disabled=not use_cond2, key='c2_m')
+cond2_days = col1.number_input(
+    "前 N 日均量", 
+    min_value=1, value=5, step=1, 
+    disabled=not use_cond2, key='c2_d'
+)
+cond2_multi = col2.number_input(
+    "突破倍數 (M)", 
+    min_value=1.0, value=2.0, step=0.5, 
+    disabled=not use_cond2, key='c2_m'
+)
 
-use_cond3 = st.sidebar.checkbox("3. 本益比 <= N 倍", help="邏輯：今日最新本益比 <= N 倍，且強制排除本益比為負數或 0（虧損）的公司。")
-cond3_pe = st.sidebar.number_input("本益比上限 (N)", min_value=0.0, value=15.0, step=1.0, disabled=not use_cond3, key='c3_pe')
+use_cond3 = st.sidebar.checkbox(
+    "3. 本益比 <= N 倍", 
+    help="邏輯：今日最新本益比 <= N 倍，且強制排除本益比為負數或 0（虧損）的公司。"
+)
+cond3_pe = st.sidebar.number_input(
+    "本益比上限 (N)", 
+    min_value=0.0, value=15.0, step=1.0, 
+    disabled=not use_cond3, key='c3_pe'
+)
 
-use_cond4 = st.sidebar.checkbox("4. 收盤價創 N 日新高", help="邏輯：今日收盤價 >= 過去 N 個交易日（包含今日）的最高價。即使今日平盤但仍是區間最高，亦符合條件。")
-cond4_days = st.sidebar.number_input("創高日數 (N)", min_value=2, value=20, step=1, disabled=not use_cond4, key='c4_d')
+use_cond4 = st.sidebar.checkbox(
+    "4. 收盤價創 N 日新高", 
+    help="邏輯：今日收盤價 >= 過去 N 個交易日（包含今日）的最高價。即使今日平盤但仍是區間最高，亦符合條件。"
+)
+cond4_days = st.sidebar.number_input(
+    "創高日數 (N)", 
+    min_value=2, value=20, step=1, 
+    disabled=not use_cond4, key='c4_d'
+)
 
-use_cond5 = st.sidebar.checkbox("5. 連續 N 季單季 EPS >= M 元 (未啟用)", help="邏輯：未來擴充項目。待 EPS 爬蟲建立並匯入新 CSV 後將啟用連動。")
+use_cond5 = st.sidebar.checkbox(
+    "5. 連續 N 季單季 EPS >= M 元 (未啟用)", 
+    help="邏輯：未來擴充項目。待 EPS 爬蟲建立並匯入新 CSV 後將啟用連動。"
+)
 col1, col2 = st.sidebar.columns(2)
-cond5_q = col1.number_input("連續季數 (N)", min_value=1, value=4, step=1, disabled=not
+cond5_q = col1.number_input(
+    "連續季數 (N)", 
+    min_value=1, value=4, step=1, 
+    disabled=not use_cond5, key='c5_q'
+)
+cond5_eps = col2.number_input(
+    "最低 EPS (M)", 
+    min_value=0.0, value=1.0, step=0.1, 
+    disabled=not use_cond5, key='c5_e'
+)
+
+use_cond6 = st.sidebar.checkbox(
+    "6. 主力買超創 N 日新高", 
+    help="邏輯：今日主力淨買超張數 >= 過去 N 個交易日（包含今日）的最大淨買超張數。即使過去全為賣超(負數)，今日轉買(正數)亦算創高。"
+)
+cond6_days = st.sidebar.number_input(
+    "創高日數 (N)", 
+    min_value=2, value=5, step=1, 
+    disabled=not use_cond6, key='c6_d'
+)
+
+
+# ==========================================
+# 5. 核心篩選引擎 (向量化運算)
+# ==========================================
+valid_stocks = set(latest_df['代號'].tolist())
+dynamic_columns = {} 
+
+has_active_conditions = any([
+    use_cond_no_etf, use_cond_no_pref, use_cond1, 
+    use_cond2, use_cond3, use_cond4, use_cond5, use_cond6
+])
+
+if has_active_conditions:
+    
+    if use_cond_no_etf:
+        pass_stocks = latest_df[~latest_df['代號'].str.match(r'^(00|01|02)')]['代號']
+        valid_stocks = valid_stocks.intersection(set(pass_stocks))
+
+    if use_cond_no_pref:
+        pass_stocks = latest_df[~latest_df['代號'].str.contains(r'[a-zA-Z]', regex=True, na=False)]['代號']
+        valid_stocks = valid_stocks.intersection(set(pass_stocks))
+
+    if use_cond1:
+        min_vol_N_days = df.groupby('代號')['
