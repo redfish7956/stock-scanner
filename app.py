@@ -28,6 +28,11 @@ def load_data(mtime):
     try:
         df = pd.read_csv('tw_stock_data.csv', dtype={'代號': str})
         
+        # --- 新增：載入產業別映射 ---
+        if os.path.exists('industry_mapping.csv'):
+            mapping_df = pd.read_csv('industry_mapping.csv', dtype={'代號': str})
+            df = df.merge(mapping_df, on='代號', how='left')
+        
         if df.empty:
             st.error("CSV 目前無資料，可能背景正在更新，請稍後重整。")
             return pd.DataFrame()
@@ -266,12 +271,12 @@ else:
         result_df['前N日均量倍數'] = result_df['代號'].map(dynamic_columns['前N日均量倍數'])
 
     base_columns = [
-        '代號', '名稱', '市場別', '收盤價', 
+        '代號', '名稱', '產業別', '市場別', '收盤價', 
         '漲跌幅(%)', '成交量(張)', '本益比', '主力淨買超(張)'
     ]
     
     if use_cond2:
-        base_columns.insert(6, '前N日均量倍數') 
+        base_columns.insert(7, '前N日均量倍數') 
         
     final_display_df = result_df[base_columns]
 
