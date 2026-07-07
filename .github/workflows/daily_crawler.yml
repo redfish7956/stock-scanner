@@ -1,0 +1,50 @@
+name: Daily Stock Automation Pipeline
+
+on:
+  schedule:
+    # 📝 GitHub Actions 使用的是 UTC 國際標準時間 (台灣時間減 8 小時)
+    # 為了避免證交所當下網路波動，我們設定 17:00 ~ 20:00 每小時自動檢查並補抓一次
+    - cron: '0 09 * * 1-5'  # 1. 台灣時間週一至週五 17:00 (首輪發動)
+    - cron: '0 10 * * 1-5'  # 2. 台灣時間週一至週五 18:00 (第一備援)
+    - cron: '0 11 * * 1-5'  # 3. 台灣時間週一至週五 19:00 (第二備援)
+    - cron: '0 12 * * 1-5'  # 4. 台灣時間週一至週五 20:00 (終端補漏)
+  workflow_dispatch:        # 🌟 保持保留：允許您隨時在網頁上點擊「Run workflow」手動觸發
+
+# 強制宣告此自動化腳本具備讀取與寫入倉庫權限
+permissions:
+  contents: write
+
+jobs:
+  stock-crawler-job:
+    runs-on: ubuntu-latest
+
+    steps:
+    # 步驟 1：下載倉庫內的所有檔案 (包含目前的 120 天完整歷史 CSV)
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    # 步驟 2：初始化 Python 執行環境
+    - name: Set up Python Environment
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    # 步驟 3：完整安裝爬蟲所需的環境與前人結晶套件
+    - name: Install System Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests pandas lxml urllib3 git+https://github.com/nk7260ynpa/Tw_stock_crawer.git
+
+    # 步驟 4：執行您的核心數據抓取腳本
+    - name: Execute Daily Stock Crawler
+      run: python daily_crawler.py
+
+    # 步驟 5：將更新與瘦身後的 CSV 自動推播回您的 GitHub 倉庫
+    - name: Automated Commit and Push Changes
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action Bot"
+        git add tw_stock_data.csv
+        # 使用 || exit 0 保護：若遇到休市日或該時段資料早已齊全，無任何檔案變動時，腳本會優雅結束不報錯
+        git commit -m "Auto-update stock database [skip ci]" || exit 0
+        git push
