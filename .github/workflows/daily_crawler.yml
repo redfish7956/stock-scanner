@@ -46,4 +46,5 @@ jobs:
         git add tw_stock_data.csv
         # 使用 || exit 0 保護：若遇到休市日或該時段資料早已齊全，無任何檔案變動時，腳本會優雅結束不報錯
         git commit -m "Auto-update stock database [skip ci]" || exit 0
+        git pull --rebase origin main
         git push
