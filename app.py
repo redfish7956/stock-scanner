@@ -275,4 +275,111 @@ else:
         
     final_display_df = result_df[base_columns]
 
-    st.write(f"### 篩選結果：共 {len(final_display_df)} 檔符合條件
+    st.write(f"### 篩選結果：共 {len(final_display_df)} 檔符合條件")
+    
+    if not final_display_df.empty:
+        format_dict = {
+            '收盤價': '{:,.2f}',
+            '成交量(張)': '{:,.0f}',
+            '主力淨買超(張)': '{:,.0f}',
+            '本益比': '{:,.2f}',
+            '前N日均量倍數': '{:,.2f}'
+        }
+        
+        active_format_dict = {
+            k: v for k, v in format_dict.items() 
+            if k in final_display_df.columns
+        }
+        
+        cols_to_color = []
+        if use_cond1 or use_cond2: cols_to_color.append('成交量(張)')
+        if use_cond2: cols_to_color.append('前N日均量倍數')
+        if use_cond4: cols_to_color.append('收盤價')
+        if use_cond6: cols_to_color.append('主力淨買超(張)')
+        
+        def color_blue(val):
+            return 'color: #2196F3; font-weight: bold;'
+            
+        styled_df = final_display_df.style.format(active_format_dict, na_rep="-")
+        
+        if cols_to_color:
+            styled_df = styled_df.map(color_blue, subset=cols_to_color)
+
+        st.markdown(
+            "<p style='font-size: 14px; color: #888;'>💡 提示：點選表格左側核取方塊可展開診斷明細。</p>", 
+            unsafe_allow_html=True
+        )
+
+        try:
+            event = st.dataframe(
+                styled_df, 
+                use_container_width=True, 
+                hide_index=True, 
+                on_select="rerun", 
+                selection_mode="single-row"
+            )
+            selected_rows = event.selection.rows
+        except TypeError:
+            st.dataframe(styled_df, use_container_width=True, hide_index=True)
+            selected_rows = []
+
+        # ==========================================
+        # 7. 個股深度診斷展開區
+        # ==========================================
+        if selected_rows:
+            selected_idx = selected_rows[0]
+            sel_code = final_display_df.iloc[selected_idx]['代號']
+            sel_name = final_display_df.iloc[selected_idx]['名稱']
+            
+            st.markdown("---")
+            st.markdown(f"#### 🔍 【{sel_code} {sel_name}】條件診斷明細")
+            
+            stock_hist = df[df['代號'] == sel_code].head(30)
+            
+            if use_cond1:
+                vol_hist = stock_hist['成交量(張)'].head(cond1_days).tolist()
+                vol_str = ", ".join([f"{int(v):,}" for v in vol_hist])
+                st.success(f"**✅ 條件 1：連續 {cond1_days} 日成交量 >= {cond1_vol} 張**")
+                st.write(f"🔹 過去 {cond1_days} 日明細：`{vol_str}` (最小: `{int(min(vol_hist)):,}`)")
+                
+            if use_cond2:
+                today_v = stock_hist.iloc[0]['成交量(張)']
+                past_vols = stock_hist['成交量(張)'].iloc[1:cond2_days+1].tolist()
+                avg_v = sum(past_vols) / len(past_vols) if past_vols else 0
+                multi = today_v / avg_v if avg_v > 0 else 0
+                vol_str = ", ".join([f"{int(v):,}" for v in past_vols])
+                
+                st.success(f"**✅ 條件 2：成交量 > 前 {cond2_days} 日均量的 {cond2_multi} 倍**")
+                st.write(f"🔹 今日量：`{int(today_v):,} 張`")
+                st.write(f"🔹 前 {cond2_days} 日明細：`{vol_str}`")
+                st.write(f"🔹 均量：`{int(avg_v):,} 張` ➡️ 突破：`{multi:.2f} 倍`")
+                
+            if use_cond4:
+                today_c = stock_hist.iloc[0]['收盤價']
+                past_closes = stock_hist['收盤價'].head(cond4_days).tolist()
+                max_c = max(past_closes)
+                st.success(f"**✅ 條件 4：收盤價創 {cond4_days} 日新高**")
+                st.write(f"🔹 今日收盤：`{today_c:.2f}` (區間最高: `{max_c:.2f}`)")
+
+            if use_cond6:
+                today_i = stock_hist.iloc[0]['主力淨買超(張)']
+                past_inst = stock_hist['主力淨買超(張)'].head(cond6_days).tolist()
+                max_i = max(past_inst)
+                st.success(f"**✅ 條件 6：主力買超創 {cond6_days} 日新高**")
+                st.write(f"🔹 今日買超：`{int(today_i):,} 張` (區間最高: `{int(max_i):,} 張`)")
+
+        st.markdown("---")
+        
+        csv_data = final_display_df.to_csv(
+            index=False, 
+            encoding='utf-8-sig'
+        ).encode('utf-8-sig')
+        
+        st.download_button(
+            label="📥 下載篩選結果 (CSV)", 
+            data=csv_data, 
+            file_name=f"stock_screen_{latest_date_str.replace('/','')}.csv", 
+            mime='text/csv'
+        )
+    else:
+        st.warning("無符合條件之股票。")
