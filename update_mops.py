@@ -26,28 +26,39 @@ def get_sliding_window_quarters():
     else: # 12月
         return [(year_roc, 3), (year_roc, 4)]
 
-def fetch_mops_with_curl(year, quarter):
+def get_mops_session():
     """
-    使用 cURL 破解邏輯抓取指定季度的上市/上櫃資料
+    【全新魔法】自動獲取最新鮮的 Cookie，免除手動更新煩惱
     """
-    url = 'https://mopsov.twse.com.tw/mops/web/ajax_t163sb04'
-    
-    # 🔐 【安全機制】從 GitHub Secrets 動態讀取 Cookie，不寫死在程式碼裡
-    mops_cookie = os.getenv('MOPS_COOKIE', '')
-    if not mops_cookie:
-        print("⚠️ 警告：找不到 MOPS_COOKIE 環境變數，可能會被伺服器阻擋！")
-
-    headers = {
-        'Accept': '*/*',
+    session = requests.Session()
+    # 偽裝成正常的 Chrome 瀏覽器
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
         'Connection': 'keep-alive',
+    })
+    
+    try:
+        print("  🔑 正在向 MOPS 伺服器報到，自動獲取最新 Cookie...")
+        # 先拜訪一次首頁，伺服器就會自動把 Cookie (jcsession) 發給這個 Session
+        session.get('https://mops.twse.com.tw/mops/web/t163sb04', timeout=15)
+        return session
+    except Exception as e:
+        print(f"  ❌ 獲取 Cookie 失敗: {e}")
+        return session
+
+def fetch_mops_with_session(year, quarter, session):
+    """
+    使用攜帶最新 Cookie 的 Session 進行資料抓取
+    """
+    url = 'https://mops.twse.com.tw/mops/web/ajax_t163sb04'
+    
+    # 補充 POST 專用的 Header
+    post_headers = {
+        'Accept': '*/*',
         'Content-Type': 'application/x-www-form-urlencoded',
-        'Cookie': mops_cookie,
-        'Origin': 'https://mopsov.twse.com.tw',
-        'Sec-Fetch-Dest': 'empty',
-        'Sec-Fetch-Mode': 'cors',
-        'Sec-Fetch-Site': 'same-origin',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
+        'Origin': 'https://mops.twse.com.tw',
+        'Referer': 'https://mops.twse.com.tw/mops/web/t163sb04'
     }
 
     quarter_dfs = []
@@ -61,10 +72,10 @@ def fetch_mops_with_curl(year, quarter):
         }
 
         try:
-            response = requests.post(url, headers=headers, data=data, timeout=20)
+            # 直接使用 session.post，它會自動帶上剛剛拿到的 Cookie
+            response = session.post(url, headers=post_headers, data=data, timeout=20)
             response.encoding = 'utf8'
             
-            # 偵測是否被軟性封鎖
             if "查詢過於頻繁" in response.text:
                 print(f"  🛑 遭伺服器阻擋 ({market_name})，休眠後跳過...")
                 time.sleep(5)
@@ -104,7 +115,7 @@ def fetch_mops_with_curl(year, quarter):
                 quarter_dfs.append(target_df)
                 print(f"  ✅ 成功取得 {year} Q{quarter} - {market_name}，共 {len(target_df)} 筆")
             else:
-                print(f"  ⚠️ 警告：{year} Q{quarter} - {market_name} 未找到數據 (可能尚未公佈)。")
+                print(f"  ⚠️ 警告：{year} Q{quarter} - {market_name} 未找到數據。")
                 
         except ValueError:
             print(f"  ⚠️ 警告：該季度無表格 (可能尚未公佈)")
@@ -161,14 +172,17 @@ if __name__ == "__main__":
     
     print("🚀 [Phase 2 自動化] 開始執行每日財報更新排程...")
     
-    # 1. 啟動時間導航儀，取得目標季度
+    # 1. 建立自動獲取 Cookie 的 Session
+    active_session = get_mops_session()
+
+    # 2. 啟動時間導航儀，取得目標季度
     target_quarters = get_sliding_window_quarters()
     print(f"📅 根據當前月份，鎖定追蹤之季度為: {target_quarters}")
     
-    # 2. 抓取與清洗新資料
+    # 3. 抓取與清洗新資料
     new_data_list = []
     for yr, qtr in target_quarters:
-        raw_df = fetch_mops_with_curl(yr, qtr)
+        raw_df = fetch_mops_with_session(yr, qtr, active_session)
         processed_df = clean_and_calculate_metrics(raw_df)
         if not processed_df.empty:
             new_data_list.append(processed_df)
@@ -180,15 +194,12 @@ if __name__ == "__main__":
     df_new = pd.concat(new_data_list, ignore_index=True)
     df_new.fillna(0, inplace=True)
     
-    # 3. 🛡️ 企業級 Upsert 覆核取代邏輯
+    # 4. 🛡️ 企業級 Upsert 覆核取代邏輯
     if os.path.exists(CSV_FILENAME):
         print(f"🔍 讀取歷史資料庫進行合併與取代作業...")
         df_master = pd.read_csv(CSV_FILENAME)
-        
-        # 將舊資料與今天剛抓到的新資料疊加
         df_combined = pd.concat([df_master, df_new], ignore_index=True)
-        
-        # 【核心魔法】用 Primary Key 進行去重複，保留最新的一筆 (解決更正報表問題)
+        # 【核心魔法】用 Primary Key 進行去重複，保留最新的一筆
         df_combined.drop_duplicates(subset=['年度', '季度', '公司代號'], keep='last', inplace=True)
     else:
         print(f"⚠️ 找不到歷史資料庫，將直接建立新檔案。")
@@ -197,7 +208,7 @@ if __name__ == "__main__":
     # 排序讓資料美觀
     df_combined.sort_values(by=['年度', '季度', '公司代號'], ascending=[False, False, True], inplace=True)
     
-    # 4. 存檔 (交給 Git 決定是否有實質異動)
+    # 5. 存檔 (交給 Git 決定是否有實質異動)
     df_combined.to_csv(CSV_FILENAME, index=False, encoding='utf-8-sig')
     
     print(f"✅ 資料庫合併完成！總筆數: {len(df_combined)} 筆。等待 GitHub Actions 判斷是否推送。")
