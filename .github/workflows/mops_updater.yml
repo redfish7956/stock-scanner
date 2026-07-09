@@ -1,0 +1,52 @@
+name: MOPS Financial Data Auto Updater
+
+on:
+  schedule:
+    # 每天台北時間下午 18:00 自動執行 (UTC 10:00)
+    - cron: '0 10 * * *'
+  workflow_dispatch: # 允許手動強制執行 (未來給 Streamlit 遙控用的)
+
+jobs:
+  update-data:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests pandas lxml
+
+    - name: Run update script
+      env:
+        # 將 GitHub Secrets 裡的密碼拿出來變成環境變數
+        MOPS_COOKIE: ${{ secrets.MOPS_COOKIE }}
+      run: python update_mops.py
+
+    - name: Commit and Push if changed
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        
+        # 把更新好的 CSV 放進準備區
+        git add mops_financial_history_8Q_ALL_DATA.csv
+        
+        # 檢查檔案是否真的有變動
+        if ! git diff --cached --quiet; then
+          git commit -m "Auto-update MOPS financial data [skip ci]"
+          
+          # 🛡️ 防衝突絕招：先向遠端拉取最新狀態，若有衝突以機器人剛抓的為主
+          git pull origin main --no-rebase -X ours
+          
+          git push
+          echo "✨ 資料庫產生實質變動！已成功推送到 GitHub。"
+        else
+          echo "😴 今日資料無異動，不發動推送，優雅下班。"
+        fi
