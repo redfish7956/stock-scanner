@@ -222,16 +222,41 @@ cond6_days = st.sidebar.number_input(
     disabled=not use_cond6, key='c6_d'
 )
 
-# [新增] 手動觸發 GitHub 爬蟲按鈕
+# [修改] 手動觸發 GitHub 爬蟲按鈕 (雙按鈕與提示說明)
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚙️ 系統管理")
-if st.sidebar.button("🚀 手動強制更新財報", type="primary"):
+
+# 1. 每日價量更新按鈕
+if st.sidebar.button("📊 手動更新每日價量", type="primary", help="更新每日的股價、價量、本益比及三大法人等資料。\n\n⚠️ 更新頻率：每日"):
     try:
-        # 請確認這裡的帳號與專案名稱是否正確
         GITHUB_USER = "redfish7956"
         REPO_NAME = "stock-scanner"
         GITHUB_TOKEN = st.secrets["GITHUB_TOKEN"]
 
+        # 呼叫每日價量的排程 (未來您需在 GitHub 中建立這個 price_updater.yml)
+        url = f"https://api.github.com/repos/{GITHUB_USER}/{REPO_NAME}/actions/workflows/price_updater.yml/dispatches"
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {GITHUB_TOKEN}",
+            "X-GitHub-Api-Version": "2022-11-28"
+        }
+        res = requests.post(url, headers=headers, json={"ref": "main"})
+        
+        if res.status_code == 204:
+            st.sidebar.success("✅ 成功觸發！雲端機器人已出動更新「每日價量」。")
+        else:
+            st.sidebar.error(f"❌ 觸發失敗 ({res.status_code})")
+    except Exception as e:
+        st.sidebar.error(f"❌ 錯誤: 找不到 GITHUB_TOKEN 或設定異常。")
+
+# 2. 季財報更新按鈕 (放在下方)
+if st.sidebar.button("🚀 手動更新季財報", type="primary", help="更新各上市櫃公司的 EPS、營業毛利等財務數據。\n\n⚠️ 更新頻率：每季"):
+    try:
+        GITHUB_USER = "redfish7956"
+        REPO_NAME = "stock-scanner"
+        GITHUB_TOKEN = st.secrets["GITHUB_TOKEN"]
+
+        # 呼叫季財報的排程
         url = f"https://api.github.com/repos/{GITHUB_USER}/{REPO_NAME}/actions/workflows/mops_updater.yml/dispatches"
         headers = {
             "Accept": "application/vnd.github+json",
@@ -241,7 +266,7 @@ if st.sidebar.button("🚀 手動強制更新財報", type="primary"):
         res = requests.post(url, headers=headers, json={"ref": "main"})
         
         if res.status_code == 204:
-            st.sidebar.success("✅ 成功觸發！雲端機器人已出動更新財報。")
+            st.sidebar.success("✅ 成功觸發！雲端機器人已出動更新「季財報」。")
         else:
             st.sidebar.error(f"❌ 觸發失敗 ({res.status_code})")
     except Exception as e:
