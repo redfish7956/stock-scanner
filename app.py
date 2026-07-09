@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import os
+import requests  # 新增：用於呼叫 GitHub API
 
 # ==========================================
 # 1. 頁面與基本設定
@@ -70,6 +71,39 @@ if df.empty:
 latest_date = df['日期'].max()
 latest_date_str = latest_date.strftime('%Y/%m/%d')
 latest_df = df[df['日期'] == latest_date].copy()
+
+# ==========================================
+# [新增] 2.5 讀取並合併 EPS 財報數據
+# ==========================================
+def get_mops_mtime():
+    return os.path.getmtime('mops_financial_history_8Q_ALL_DATA.csv') if os.path.exists('mops_financial_history_8Q_ALL_DATA.csv') else 0
+
+@st.cache_data(ttl=3600)
+def load_mops_data(mtime):
+    try:
+        m_df = pd.read_csv('mops_financial_history_8Q_ALL_DATA.csv', dtype={'公司代號': str})
+        if not m_df.empty:
+            m_df['年度'] = pd.to_numeric(m_df['年度'], errors='coerce')
+        return m_df
+    except Exception:
+        return pd.DataFrame()
+
+mops_df = load_mops_data(get_mops_mtime())
+
+if not mops_df.empty:
+    # 確保以年度與季度降序排列 (找出最新的一筆)
+    mops_sorted = mops_df.sort_values(by=['年度', '季度'], ascending=[False, False])
+    mops_latest = mops_sorted.drop_duplicates(subset=['公司代號'], keep='first').copy()
+    
+    # 組合面具字串，例如：4.8 (114_Q4)
+    mops_latest['最新EPS'] = mops_latest['EPS'].astype(str) + " (" + mops_latest['年度'].astype(str) + "_" + mops_latest['季度'] + ")"
+    
+    # 合併回 latest_df 主表
+    latest_df = latest_df.merge(mops_latest[['公司代號', '最新EPS']], left_on='代號', right_on='公司代號', how='left')
+    latest_df.drop(columns=['公司代號'], inplace=True, errors='ignore')
+    latest_df['最新EPS'] = latest_df['最新EPS'].fillna("-")
+else:
+    latest_df['最新EPS'] = "-"
 
 # ==========================================
 # 3. 欄位數據加工
@@ -151,9 +185,10 @@ cond4_days = st.sidebar.number_input(
     disabled=not use_cond4, key='c4_d'
 )
 
+# [修改] 移除(未啟用)，正式上線
 use_cond5 = st.sidebar.checkbox(
-    "5. 連續 N 季 EPS >= M (未啟用)", 
-    help="建置中：待 EPS 爬蟲匯入後連動。"
+    "5. 連續 N 季 EPS >= M", 
+    help="聯動財報資料庫，篩選連續數季皆達標之公司。"
 )
 col1, col2 = st.sidebar.columns(2)
 cond5_q = col1.number_input(
@@ -174,6 +209,41 @@ cond6_days = st.sidebar.number_input(
     disabled=not use_cond6, key='c6_d'
 )
 
+# [新增] 第 7 項篩選條件：精確搜尋
+use_cond7 = st.sidebar.checkbox(
+    "7. 搜尋特定股票", 
+    help="輸入股票代號或名稱進行精確篩選。"
+)
+cond7_keyword = st.sidebar.text_input(
+    "輸入代號或名稱關鍵字", 
+    disabled=not use_cond7, key='c7_kw'
+)
+
+# [新增] 手動觸發 GitHub 爬蟲按鈕
+st.sidebar.markdown("---")
+st.sidebar.subheader("⚙️ 系統管理")
+if st.sidebar.button("🚀 手動強制更新財報", type="primary"):
+    try:
+        # 請確認這裡的帳號與專案名稱是否正確
+        GITHUB_USER = "redfish7956"
+        REPO_NAME = "stock-scanner"
+        GITHUB_TOKEN = st.secrets["GITHUB_TOKEN"]
+
+        url = f"https://api.github.com/repos/{GITHUB_USER}/{REPO_NAME}/actions/workflows/mops_updater.yml/dispatches"
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {GITHUB_TOKEN}",
+            "X-GitHub-Api-Version": "2022-11-28"
+        }
+        res = requests.post(url, headers=headers, json={"ref": "main"})
+        
+        if res.status_code == 204:
+            st.sidebar.success("✅ 成功觸發！雲端機器人已出動更新財報。")
+        else:
+            st.sidebar.error(f"❌ 觸發失敗 ({res.status_code})")
+    except Exception as e:
+        st.sidebar.error(f"❌ 錯誤: 找不到 GITHUB_TOKEN 或設定異常。")
+
 # ==========================================
 # 5. 核心篩選引擎
 # ==========================================
@@ -188,7 +258,8 @@ cond_list = [
     use_cond3, 
     use_cond4, 
     use_cond5, 
-    use_cond6
+    use_cond6,
+    use_cond7  # 新增
 ]
 has_active_conditions = any(cond_list)
 
@@ -237,8 +308,20 @@ if has_active_conditions:
         pass_stocks = today_close[today_close >= max_closes].index
         valid_stocks = valid_stocks.intersection(set(pass_stocks))
 
+    # [修改] 正式啟動 EPS 篩選邏輯
     if use_cond5:
-        st.sidebar.info("EPS 篩選模組建置中。")
+        if not mops_df.empty:
+            # 確保按時間最新到最舊排序
+            mops_sorted_cond = mops_df.sort_values(by=['公司代號', '年度', '季度'], ascending=[True, False, False])
+            
+            def check_eps(g):
+                if len(g) < cond5_q: return False
+                return (g.head(cond5_q)['EPS'] >= cond5_eps).all()
+            
+            valid_eps_companies = mops_sorted_cond.groupby('公司代號').filter(check_eps)['公司代號'].unique()
+            valid_stocks = valid_stocks.intersection(set(valid_eps_companies))
+        else:
+            st.warning("⚠️ 財報資料庫未載入，無法執行 EPS 篩選。")
 
     if use_cond6:
         today_inst = df.groupby('代號')['主力淨買超(張)'].first()
@@ -247,6 +330,15 @@ if has_active_conditions:
         
         pass_stocks = today_inst[today_inst >= max_inst].index
         valid_stocks = valid_stocks.intersection(set(pass_stocks))
+
+    # [新增] 搜尋條件邏輯
+    if use_cond7:
+        if cond7_keyword:
+            mask = latest_df['代號'].str.contains(cond7_keyword, na=False) | latest_df['名稱'].str.contains(cond7_keyword, na=False)
+            pass_stocks = latest_df[mask]['代號']
+            valid_stocks = valid_stocks.intersection(set(pass_stocks))
+        else:
+            valid_stocks = set() # 若有勾選但沒輸入關鍵字，回傳空表
 
 # ==========================================
 # 6. 右側主畫面 (Main Area)
@@ -270,13 +362,14 @@ else:
     if use_cond2 and '前N日均量倍數' in dynamic_columns:
         result_df['前N日均量倍數'] = result_df['代號'].map(dynamic_columns['前N日均量倍數'])
 
+    # [修改] 插入 '最新EPS' 欄位至顯示列表中
     base_columns = [
         '代號', '名稱', '產業別', '市場別', '收盤價', 
-        '漲跌幅(%)', '成交量(張)', '本益比', '主力淨買超(張)'
+        '漲跌幅(%)', '成交量(張)', '最新EPS', '本益比', '主力淨買超(張)'
     ]
     
     if use_cond2:
-        base_columns.insert(7, '前N日均量倍數') 
+        base_columns.insert(8, '前N日均量倍數') # 調整位置，讓倍數在EPS之後
         
     final_display_df = result_df[base_columns]
 
@@ -300,6 +393,7 @@ else:
         if use_cond1 or use_cond2: cols_to_color.append('成交量(張)')
         if use_cond2: cols_to_color.append('前N日均量倍數')
         if use_cond4: cols_to_color.append('收盤價')
+        if use_cond5: cols_to_color.append('最新EPS') # 補上這行：啟動 EPS 篩選時標示藍字
         if use_cond6: cols_to_color.append('主力淨買超(張)')
         
         def color_blue(val):
@@ -366,12 +460,25 @@ else:
                 st.success(f"**✅ 條件 4：收盤價創 {cond4_days} 日新高**")
                 st.write(f"🔹 今日收盤：`{today_c:.2f}` (區間最高: `{max_c:.2f}`)")
 
+            # [新增] EPS 診斷明細
+            if use_cond5:
+                if not mops_df.empty:
+                    comp_eps = mops_df[mops_df['公司代號'] == sel_code].sort_values(by=['年度', '季度'], ascending=[False, False]).head(cond5_q)
+                    eps_list = comp_eps['EPS'].tolist()
+                    eps_str = ", ".join([f"{v:.2f}" for v in eps_list])
+                    st.success(f"**✅ 條件 5：連續 {cond5_q} 季 EPS >= {cond5_eps}**")
+                    st.write(f"🔹 近 {cond5_q} 季 EPS 明細：`{eps_str}`")
+
             if use_cond6:
                 today_i = stock_hist.iloc[0]['主力淨買超(張)']
                 past_inst = stock_hist['主力淨買超(張)'].head(cond6_days).tolist()
                 max_i = max(past_inst)
                 st.success(f"**✅ 條件 6：主力買超創 {cond6_days} 日新高**")
                 st.write(f"🔹 今日買超：`{int(today_i):,} 張` (區間最高: `{int(max_i):,} 張`)")
+                
+            # [新增] 搜尋條件診斷明細
+            if use_cond7:
+                st.success(f"**✅ 條件 7：搜尋符合關鍵字 `{cond7_keyword}`**")
 
         st.markdown("---")
         
