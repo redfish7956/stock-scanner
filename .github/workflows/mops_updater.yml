@@ -24,10 +24,8 @@ jobs:
         python -m pip install --upgrade pip
         pip install requests pandas lxml
 
+    # 【改動點】移除了讀取 Secrets 的步驟，直接執行 Python 腳本
     - name: Run update script
-      env:
-        # 將 GitHub Secrets 裡的密碼拿出來變成環境變數
-        MOPS_COOKIE: ${{ secrets.MOPS_COOKIE }}
       run: python update_mops.py
 
     - name: Commit and Push if changed
