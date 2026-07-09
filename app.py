@@ -127,6 +127,7 @@ latest_df['漲跌幅(%)'] = latest_df.apply(format_change, axis=1)
 # ==========================================
 st.sidebar.header("📊 條件篩選器")
 
+# 【區塊一】基礎與全域篩選區
 use_cond_no_etf = st.sidebar.checkbox(
     "🚫 排除 ETF (00開頭)", 
     value=False, 
@@ -137,8 +138,20 @@ use_cond_no_pref = st.sidebar.checkbox(
     value=False, 
     help="剔除代號含有英文字母的標的。"
 )
+
+# [移動位置] 精確搜尋拉到最上方基礎區塊，並移除編號
+use_cond7 = st.sidebar.checkbox(
+    "🔍 搜尋特定股票", 
+    help="輸入股票代號或名稱進行精確篩選。"
+)
+cond7_keyword = st.sidebar.text_input(
+    "輸入代號或名稱關鍵字", 
+    disabled=not use_cond7, key='c7_kw'
+)
+
 st.sidebar.markdown("---")
 
+# 【區塊二】量化條件篩選區
 use_cond1 = st.sidebar.checkbox(
     "1. 連續 N 日成交量 >= M 張", 
     help="過去 N 天（含今日）每天成交量 >= 設定張數。"
@@ -209,16 +222,6 @@ cond6_days = st.sidebar.number_input(
     disabled=not use_cond6, key='c6_d'
 )
 
-# [新增] 第 7 項篩選條件：精確搜尋
-use_cond7 = st.sidebar.checkbox(
-    "7. 搜尋特定股票", 
-    help="輸入股票代號或名稱進行精確篩選。"
-)
-cond7_keyword = st.sidebar.text_input(
-    "輸入代號或名稱關鍵字", 
-    disabled=not use_cond7, key='c7_kw'
-)
-
 # [新增] 手動觸發 GitHub 爬蟲按鈕
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚙️ 系統管理")
@@ -253,13 +256,13 @@ dynamic_columns = {}
 cond_list = [
     use_cond_no_etf, 
     use_cond_no_pref, 
+    use_cond7, # 移至前方
     use_cond1, 
     use_cond2, 
     use_cond3, 
     use_cond4, 
     use_cond5, 
-    use_cond6,
-    use_cond7  # 新增
+    use_cond6
 ]
 has_active_conditions = any(cond_list)
 
@@ -274,6 +277,15 @@ if has_active_conditions:
         mask = ~latest_df['代號'].str.contains(r'[a-zA-Z]', regex=True, na=False)
         pass_stocks = latest_df[mask]['代號']
         valid_stocks = valid_stocks.intersection(set(pass_stocks))
+
+    # [移動位置] 搜尋條件邏輯
+    if use_cond7:
+        if cond7_keyword:
+            mask = latest_df['代號'].str.contains(cond7_keyword, na=False) | latest_df['名稱'].str.contains(cond7_keyword, na=False)
+            pass_stocks = latest_df[mask]['代號']
+            valid_stocks = valid_stocks.intersection(set(pass_stocks))
+        else:
+            valid_stocks = set() # 若有勾選但沒輸入關鍵字，回傳空表
 
     if use_cond1:
         min_vols = df.groupby('代號')['成交量(張)'].head(cond1_days)
@@ -330,15 +342,6 @@ if has_active_conditions:
         
         pass_stocks = today_inst[today_inst >= max_inst].index
         valid_stocks = valid_stocks.intersection(set(pass_stocks))
-
-    # [新增] 搜尋條件邏輯
-    if use_cond7:
-        if cond7_keyword:
-            mask = latest_df['代號'].str.contains(cond7_keyword, na=False) | latest_df['名稱'].str.contains(cond7_keyword, na=False)
-            pass_stocks = latest_df[mask]['代號']
-            valid_stocks = valid_stocks.intersection(set(pass_stocks))
-        else:
-            valid_stocks = set() # 若有勾選但沒輸入關鍵字，回傳空表
 
 # ==========================================
 # 6. 右側主畫面 (Main Area)
@@ -435,6 +438,10 @@ else:
             
             stock_hist = df[df['代號'] == sel_code].head(30)
             
+            # [移動位置] 搜尋條件診斷明細
+            if use_cond7:
+                st.success(f"**✅ 條件：搜尋符合關鍵字 `{cond7_keyword}`**")
+
             if use_cond1:
                 vol_hist = stock_hist['成交量(張)'].head(cond1_days).tolist()
                 vol_str = ", ".join([f"{int(v):,}" for v in vol_hist])
@@ -475,10 +482,6 @@ else:
                 max_i = max(past_inst)
                 st.success(f"**✅ 條件 6：主力買超創 {cond6_days} 日新高**")
                 st.write(f"🔹 今日買超：`{int(today_i):,} 張` (區間最高: `{int(max_i):,} 張`)")
-                
-            # [新增] 搜尋條件診斷明細
-            if use_cond7:
-                st.success(f"**✅ 條件 7：搜尋符合關鍵字 `{cond7_keyword}`**")
 
         st.markdown("---")
         
