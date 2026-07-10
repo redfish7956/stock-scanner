@@ -1,0 +1,49 @@
+name: Warning & Disposition Auto Updater
+
+on:
+  schedule:
+    # 每天台北時間下午 18:30 自動執行 (UTC 10:30)
+    # 通常證交所與櫃買中心在 18:00 前就會公告當日的注意與處置名單
+    - cron: '30 10 * * *'
+  workflow_dispatch: # 允許未來從 Streamlit 按鈕遠端手動觸發
+
+jobs:
+  update-warning-data:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests pandas urllib3
+
+    - name: Run warning update script
+      run: python update_warning.py
+
+    - name: Commit and Push if changed
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        
+        # 追蹤注意與處置資料庫
+        git add tw_warning_data.csv
+        
+        if ! git diff --cached --quiet; then
+          git commit -m "Auto-update warning and disposition data [skip ci]"
+          
+          # 防衝突機制
+          git pull origin main --no-rebase -X ours
+          
+          git push
+          echo "✨ 處置記分板有新名單！已成功推送到 GitHub。"
+        else
+          echo "😴 今日記分板無異動，不發動推送。"
+        fi
