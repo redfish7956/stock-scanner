@@ -8,7 +8,7 @@ import re
 import os
 import tw_crawler
 
-print("【系統啟動】正在初始化 全台股日線地基 (PRO 究極版 v2.2 - 自動瘦身與微觀重試)...")
+print("【系統啟動】正在初始化 全台股日線地基 (PRO 究極版 v2.5 - OHL與法人全武裝版)...")
 
 # ==========================================
 # 1. 檔案路徑設定 (GitHub 同層目錄相對路徑)
@@ -23,7 +23,7 @@ retry_strategy = Retry(total=5, status_forcelist=[429, 500, 502, 503, 504], back
 session.mount("https://", HTTPAdapter(max_retries=retry_strategy))
 
 headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/150.0.0.0',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
     'Referer': 'https://www.twse.com.tw/zh/trading/historical/bwibbu-day.html',
     'Accept': 'application/json, text/javascript, */*; q=0.01'
 }
@@ -125,26 +125,43 @@ for count, dt in enumerate(valid_dates, 1):
                 for i in range(1, 20):
                     if f'fields{i}' in res_fb and f'data{i}' in res_fb:
                         if '證券代號' in res_fb[f'fields{i}']:
-                            target_fields = res_fb[f'fields{i}']
+                            target_fields = res_fb[f'fields{i}']:
                             target_data = res_fb[f'data{i}']
                             break
                 if not target_data:
                     raise Exception("上市 (TWSE) 官方備用 API 回傳為空 (可能被擋 IP)")
                 
                 df_twse = pd.DataFrame(target_data, columns=target_fields)
-                df_twse = df_twse.rename(columns={'證券代號': '代號', '證券名稱': '名稱', '收盤價': '收盤價', '漲跌價差': '漲跌幅', '成交股數': '成交量'})
+                df_twse = df_twse.rename(columns={'證券代號': '代號', '證券名稱': '名稱', '開盤價': '開盤價', '最高價': '最高價', '最低價': '最低價', '收盤價': '收盤價', '漲跌價差': '漲跌幅', '成交股數': '成交量'})
             else:
-                df_twse = df_twse.rename(columns={'Date': '日期', 'SecurityCode': '代號', 'StockName': '名稱', 'ClosingPrice': '收盤價', 'Change': '漲跌幅', 'TradeVolume': '成交量'})
+                df_twse = df_twse.rename(columns={
+                    'Date': '日期', 'SecurityCode': '代號', 'StockName': '名稱', 
+                    'OpeningPrice': '開盤價', 'HighestPrice': '最高價', 'LowestPrice': '最低價', 
+                    'ClosingPrice': '收盤價', 'Change': '漲跌幅', 'TradeVolume': '成交量'
+                })
                 
             df_twse['代號'] = df_twse['代號'].astype(str).str.strip()
             
+            # 上市三大法人拆解
             res_insti = session.get(f"https://www.twse.com.tw/rwd/zh/fund/T86?date={api_date_twse}&selectType=ALL&response=json", headers=headers, cookies=cookies).json()
             insti_data = res_insti.get('data', [])
             if insti_data:
-                df_insti = pd.DataFrame(insti_data, columns=res_insti.get('fields', []))[['證券代號', '三大法人買賣超股數']].rename(columns={'證券代號': '代號', '三大法人買賣超股數': '主力淨買超'})
+                tmp_fields = res_insti.get('fields', [])
+                tmp_df = pd.DataFrame(insti_data, columns=tmp_fields)
+                
+                col_map = {'證券代號': '代號', '三大法人買賣超股數': '主力淨買超'}
+                if '外資及陸資買賣超股數' in tmp_fields: col_map['外資及陸資買賣超股數'] = '外資買賣超'
+                elif '外陸資買賣超股數(不含外資自營商)' in tmp_fields: col_map['外陸資買賣超股數(不含外資自營商)'] = '外資買賣超'
+                if '投信買賣超股數' in tmp_fields: col_map['投信買賣超股數'] = '投信買賣超'
+                if '自營商買賣超股數' in tmp_fields: col_map['自營商買賣超股數'] = '自營商買賣超'
+                
+                df_insti = tmp_df[list(col_map.keys())].rename(columns=col_map)
+                for c in ['外資買賣超', '投信買賣超', '自營商買賣超']:
+                    if c not in df_insti.columns: df_insti[c] = '0'
             else:
-                df_insti = pd.DataFrame(columns=['代號', '主力淨買超'])
+                df_insti = pd.DataFrame(columns=['代號', '主力淨買超', '外資買賣超', '投信買賣超', '自營商買賣超'])
             
+            # 上市本益比
             res_pe = session.get(f"https://www.twse.com.tw/rwd/zh/afterTrading/BWIBBU_d?date={api_date_twse}&selectType=ALL&response=json", headers=headers, cookies=cookies).json()
             pe_data = res_pe.get('data', [])
             if pe_data:
@@ -175,19 +192,37 @@ for count, dt in enumerate(valid_dates, 1):
                     raise Exception("上櫃 (TPEx) 官方備用 API 回傳為空 (可能被擋 IP)")
                     
                 df_tpex = pd.DataFrame(target_data, columns=target_fields)
-                df_tpex = df_tpex.rename(columns={'收盤': '收盤價', '漲跌': '漲跌幅', '成交股數': '成交量'})
+                df_tpex = df_tpex.rename(columns={'開盤': '開盤價', '最高': '最高價', '最低': '最低價', '收盤': '收盤價', '漲跌': '漲跌幅', '成交股數': '成交量'})
             else:
-                df_tpex = df_tpex.rename(columns={'Date': '日期', 'Code': '代號', 'Name': '名稱', 'Close': '收盤價', 'Change': '漲跌幅', 'TradeVolume': '成交量'})
+                df_tpex = df_tpex.rename(columns={'Date': '日期', 'Code': '代號', 'Name': '名稱', 'Open': '開盤價', 'High': '最高價', 'Low': '最低價', 'Close': '收盤價', 'Change': '漲跌幅', 'TradeVolume': '成交量'})
                 
             df_tpex['代號'] = df_tpex['代號'].astype(str).str.strip()
             
+            # 上櫃三大法人拆解 (強制使用 Index 硬核定位)
             res_tpex_insti = session.post('https://www.tpex.org.tw/www/zh-tw/insti/dailyTrade', data={'type': 'Daily', 'sect': 'AL', 'date': tpex_api_date, 'response': 'json'}).json()
             tpex_insti_tables = res_tpex_insti.get('tables', [])
-            if tpex_insti_tables and tpex_insti_tables[0].get('data'):
-                df_tpex_insti = pd.DataFrame(tpex_insti_tables[0]['data'], columns=tpex_insti_tables[0]['fields'])[['代號', '三大法人買賣超股數合計']].rename(columns={'三大法人買賣超股數合計': '主力淨買超'})
-            else:
-                df_tpex_insti = pd.DataFrame(columns=['代號', '主力淨買超'])
             
+            extracted_tpex_insti = []
+            if tpex_insti_tables and tpex_insti_tables[0].get('data'):
+                for row in tpex_insti_tables[0]['data']:
+                    try:
+                        if len(row) >= 24:
+                            extracted_tpex_insti.append({
+                                '代號': row[0],
+                                '外資買賣超': row[10],
+                                '投信買賣超': row[13],
+                                '自營商買賣超': row[22],
+                                '主力淨買超': row[23]
+                            })
+                    except:
+                        continue
+                        
+            if extracted_tpex_insti:
+                df_tpex_insti = pd.DataFrame(extracted_tpex_insti)
+            else:
+                df_tpex_insti = pd.DataFrame(columns=['代號', '主力淨買超', '外資買賣超', '投信買賣超', '自營商買賣超'])
+            
+            # 上櫃本益比
             res_tpex_pe = session.post('https://www.tpex.org.tw/www/zh-tw/afterTrading/peQryDate', data={'date': tpex_api_date, 'cate': '', 'response': 'json'}).json()
             tpex_pe_tables = res_tpex_pe.get('tables', [])
             if tpex_pe_tables and tpex_pe_tables[0].get('data'):
@@ -207,10 +242,15 @@ for count, dt in enumerate(valid_dates, 1):
             cond_fund = df_today['代號'].str.match(r'^(00|01|02)')
             df_today = df_today[cond_stock | cond_fund].copy()
 
-            for col in ['收盤價', '成交量', '本益比', '主力淨買超']:
-                df_today[col] = pd.to_numeric(df_today[col].astype(str).str.replace(',', ''), errors='coerce')
+            # 洗淨數值
+            for col in ['開盤價', '最高價', '最低價', '收盤價', '成交量', '本益比', '主力淨買超', '外資買賣超', '投信買賣超', '自營商買賣超']:
+                if col in df_today.columns:
+                    df_today[col] = pd.to_numeric(df_today[col].astype(str).str.replace(',', '').str.replace('--', ''), errors='coerce')
             
-            new_data_frames.append(df_today[['日期', '代號', '名稱', '市場別', '收盤價', '漲跌幅', '成交量', '本益比', '主力淨買超']])
+            for c in ['開盤價', '最高價', '最低價', '外資買賣超', '投信買賣超', '自營商買賣超']:
+                if c not in df_today.columns: df_today[c] = None
+
+            new_data_frames.append(df_today[['日期', '代號', '名稱', '市場別', '開盤價', '最高價', '最低價', '收盤價', '漲跌幅', '成交量', '本益比', '主力淨買超', '外資買賣超', '投信買賣超', '自營商買賣超']])
             print(f" ⚡ 第 {attempt} 次嘗試成功！保留 {len(df_today)} 筆核心標的")
             
             time.sleep(3) 
