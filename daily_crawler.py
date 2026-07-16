@@ -7,36 +7,45 @@ from datetime import datetime, timedelta
 import re
 import os
 import tw_crawler
+import io
+from contextlib import redirect_stdout
 
-print("【系統啟動】正在初始化 全台股日線地基 (PRO 究極版 v2.5 - OHL與法人全武裝版)...")
+print("【系統啟動】正在初始化 全台股日線地基 (PRO 究極版 v2.6 - Cloudflare 匿蹤靜音版)...")
 
-# ==========================================
-# 1. 檔案路徑設定 (GitHub 同層目錄相對路徑)
-# ==========================================
 CSV_PATH = 'tw_stock_data.csv'
 
 # ==========================================
-# 2. 設定通用參數
+# 1. 設定強固連線與「極度擬真」的 Headers
 # ==========================================
 session = requests.Session()
 retry_strategy = Retry(total=5, status_forcelist=[429, 500, 502, 503, 504], backoff_factor=3)
 session.mount("https://", HTTPAdapter(max_retries=retry_strategy))
 
+# 💡 【核心升級】：加入最完整的瀏覽器指紋，騙過 Cloudflare 防火牆
 headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-    'Referer': 'https://www.twse.com.tw/zh/trading/historical/bwibbu-day.html',
-    'Accept': 'application/json, text/javascript, */*; q=0.01'
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
+    'Accept': 'application/json, text/javascript, */*; q=0.01',
+    'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Connection': 'keep-alive',
+    'Sec-Fetch-Dest': 'empty',
+    'Sec-Fetch-Mode': 'cors',
+    'Sec-Fetch-Site': 'same-origin',
+    'X-Requested-With': 'XMLHttpRequest',
+    'sec-ch-ua': '"Not;A=Brand";v="8", "Chromium";v="150", "Google Chrome";v="150"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
+    'Referer': 'https://www.twse.com.tw/zh/trading/historical/bwibbu-day.html'
 }
+
 cookies = {
     'JSESSIONID': '0D1931F8D72170AC48D5576AE800DB08',
-    '_ga': 'GA1.1.161170101.1783322213',
-    '_ga_J2HVMN6FVP': 'GS2.1.s1783322213$o1$g1$t1783322453$j32$l0$h0'
+    '_ga': 'GA1.1.161170101.1783322213'
 }
 
 MAX_DAILY_RETRIES = 5
 
 # ==========================================
-# 3. 歷史資料盤點 (確保最近 120 個真實交易日完整)
+# 2. 歷史資料盤點
 # ==========================================
 df_existing = pd.DataFrame()
 existing_dates = set()
@@ -59,7 +68,6 @@ current_date = datetime.now()
 for _ in range(7):
     api_month = current_date.strftime("%Y%m01")
     url = f"https://www.twse.com.tw/rwd/zh/afterTrading/FMTQIK?date={api_month}&response=json"
-    
     try:
         res = session.get(url, headers=headers, cookies=cookies).json()
         if res.get('stat') == 'OK' and 'data' in res:
@@ -68,7 +76,7 @@ for _ in range(7):
                 g_year = int(parts[0]) + 1911
                 g_date = f"{g_year}-{parts[1]}-{parts[2]}"
                 master_trading_dates.append(g_date)
-    except Exception as e:
+    except Exception:
         pass 
     
     current_date = current_date.replace(day=1) - timedelta(days=1)
@@ -88,16 +96,7 @@ if not valid_dates:
     exit(0)
 
 # ==========================================
-# 4. 輔助函式
-# ==========================================
-def clean_num(x):
-    x = str(x).replace(',', '').strip()
-    x = re.sub(r'<[^>]+>', '', x)
-    try: return float(x)
-    except: return None 
-
-# ==========================================
-# 5. 主程式迴圈 (微觀重試機制)
+# 3. 主程式迴圈
 # ==========================================
 new_data_frames = []
 
@@ -113,18 +112,20 @@ for count, dt in enumerate(valid_dates, 1):
         try:
             # --- A. 上市邏輯 ---
             try:
-                df_twse = tw_crawler.twse_crawler(api_date_str)
+                # 🤫 【消音器】：強制隱藏套件內部的醜陋 print() 報錯
+                f = io.StringIO()
+                with redirect_stdout(f):
+                    df_twse = tw_crawler.twse_crawler(api_date_str)
             except:
                 df_twse = pd.DataFrame()
 
             if df_twse is None or df_twse.empty:
-                print("   ⚠️ 偵測到套件解析異常，啟動 TWSE 官方 API 備用救援...")
+                print("   ⚠️ 啟動 TWSE 官方 API 備用救援...")
                 res_fb = session.get(f"https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&date={api_date_twse}&type=ALL", headers=headers, cookies=cookies).json()
                 target_data, target_fields = [], []
                 for i in range(1, 20):
                     if f'fields{i}' in res_fb and f'data{i}' in res_fb:
                         if '證券代號' in res_fb[f'fields{i}']:
-                            # 🛡️ 修復點：移除了這行結尾不該存在的冒號！
                             target_fields = res_fb[f'fields{i}']
                             target_data = res_fb[f'data{i}']
                             break
@@ -142,7 +143,6 @@ for count, dt in enumerate(valid_dates, 1):
                 
             df_twse['代號'] = df_twse['代號'].astype(str).str.strip()
             
-            # 上市三大法人拆解
             res_insti = session.get(f"https://www.twse.com.tw/rwd/zh/fund/T86?date={api_date_twse}&selectType=ALL&response=json", headers=headers, cookies=cookies).json()
             insti_data = res_insti.get('data', [])
             if insti_data:
@@ -161,7 +161,6 @@ for count, dt in enumerate(valid_dates, 1):
             else:
                 df_insti = pd.DataFrame(columns=['代號', '主力淨買超', '外資買賣超', '投信買賣超', '自營商買賣超'])
             
-            # 上市本益比
             res_pe = session.get(f"https://www.twse.com.tw/rwd/zh/afterTrading/BWIBBU_d?date={api_date_twse}&selectType=ALL&response=json", headers=headers, cookies=cookies).json()
             pe_data = res_pe.get('data', [])
             if pe_data:
@@ -174,12 +173,15 @@ for count, dt in enumerate(valid_dates, 1):
 
             # --- B. 上櫃邏輯 ---
             try:
-                df_tpex = tw_crawler.tpex_crawler(api_date_str)
+                # 🤫 【消音器】：隱藏上櫃爬蟲套件被 Cloudflare 阻擋時的瘋狂報錯
+                f = io.StringIO()
+                with redirect_stdout(f):
+                    df_tpex = tw_crawler.tpex_crawler(api_date_str)
             except:
                 df_tpex = pd.DataFrame()
 
             if df_tpex is None or df_tpex.empty:
-                print("   ⚠️ 偵測到套件解析異常，啟動 TPEx 官方 API 備用救援...")
+                print("   ⚠️ 啟動 TPEx 官方 API 備用救援...")
                 res_fb = session.post('https://www.tpex.org.tw/www/zh-tw/afterTrading/dailyQuotes', data={'date': tpex_api_date, 'response': 'json'}, headers=headers).json()
                 tables = res_fb.get('tables', [])
                 target_data, target_fields = [], []
@@ -198,8 +200,8 @@ for count, dt in enumerate(valid_dates, 1):
                 
             df_tpex['代號'] = df_tpex['代號'].astype(str).str.strip()
             
-            # 上櫃三大法人拆解 (強制使用 Index 硬核定位)
-            res_tpex_insti = session.post('https://www.tpex.org.tw/www/zh-tw/insti/dailyTrade', data={'type': 'Daily', 'sect': 'AL', 'date': tpex_api_date, 'response': 'json'}).json()
+            # 上櫃三大法人拆解
+            res_tpex_insti = session.post('https://www.tpex.org.tw/www/zh-tw/insti/dailyTrade', data={'type': 'Daily', 'sect': 'AL', 'date': tpex_api_date, 'response': 'json'}, headers=headers).json()
             tpex_insti_tables = res_tpex_insti.get('tables', [])
             
             extracted_tpex_insti = []
@@ -222,8 +224,7 @@ for count, dt in enumerate(valid_dates, 1):
             else:
                 df_tpex_insti = pd.DataFrame(columns=['代號', '主力淨買超', '外資買賣超', '投信買賣超', '自營商買賣超'])
             
-            # 上櫃本益比
-            res_tpex_pe = session.post('https://www.tpex.org.tw/www/zh-tw/afterTrading/peQryDate', data={'date': tpex_api_date, 'cate': '', 'response': 'json'}).json()
+            res_tpex_pe = session.post('https://www.tpex.org.tw/www/zh-tw/afterTrading/peQryDate', data={'date': tpex_api_date, 'cate': '', 'response': 'json'}, headers=headers).json()
             tpex_pe_tables = res_tpex_pe.get('tables', [])
             if tpex_pe_tables and tpex_pe_tables[0].get('data'):
                 df_tpex_pe = pd.DataFrame(tpex_pe_tables[0]['data'], columns=tpex_pe_tables[0]['fields'])[['股票代號', '本益比']].rename(columns={'股票代號': '代號'})
@@ -242,7 +243,6 @@ for count, dt in enumerate(valid_dates, 1):
             cond_fund = df_today['代號'].str.match(r'^(00|01|02)')
             df_today = df_today[cond_stock | cond_fund].copy()
 
-            # 洗淨數值
             for col in ['開盤價', '最高價', '最低價', '收盤價', '成交量', '本益比', '主力淨買超', '外資買賣超', '投信買賣超', '自營商買賣超']:
                 if col in df_today.columns:
                     df_today[col] = pd.to_numeric(df_today[col].astype(str).str.replace(',', '').str.replace('--', ''), errors='coerce')
@@ -265,20 +265,18 @@ for count, dt in enumerate(valid_dates, 1):
                 print(f"   ❌ 放棄本日抓取：已達最大重試次數 {MAX_DAILY_RETRIES} 次。詳細錯誤: {str(e)}")
 
 # ==========================================
-# 6. 最終輸出 (寫入CSV + 滾動視窗清理)
+# 4. 最終輸出
 # ==========================================
 if new_data_frames:
     df_all = pd.concat([df_existing] + new_data_frames, ignore_index=True)
     df_all = df_all.sort_values(by=['日期', '代號'], ascending=[False, True])
 
-    # --- 🧹 啟動滾動視窗自動瘦身 ---
     MAX_KEEP_DAYS = 300  
-    
     unique_dates = sorted(df_all['日期'].unique(), reverse=True) 
     if len(unique_dates) > MAX_KEEP_DAYS:
         cutoff_date = unique_dates[MAX_KEEP_DAYS - 1]
         df_all = df_all[df_all['日期'] >= cutoff_date].copy()
-        print(f" 🧹 觸發自動瘦身：已清除 {cutoff_date} 之前的歷史資料，保持系統輕量化！")
+        print(f" 🧹 觸發自動瘦身：已清除 {cutoff_date} 之前的歷史資料。")
 
     df_all.to_csv(CSV_PATH, index=False, encoding='utf-8-sig')
     print(f"\n🎉 執行完成！CSV 已精準更新至: {CSV_PATH} (目前收錄 {len(df_all['日期'].unique())} 天資料)")
