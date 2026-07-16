@@ -6,7 +6,7 @@ on:
     # 最後一個 0 代表「星期日 (Sunday)」
     - cron: '30 10 * * 0'
   
-  # 允許我們隨時手動點擊按鈕測試
+  # 允許手動觸發
   workflow_dispatch: 
 
 jobs:
@@ -35,19 +35,20 @@ jobs:
       - name: 🚀 執行基本資料爬蟲 (Run Info Crawler)
         run: python info_crawler.py
 
-- name: 💾 將 CSV 存回 GitHub (Commit and Push)
+      - name: 💾 將 CSV 存回 GitHub (Commit, Pull, and Push)
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           
-          # 綁定基本資料的 CSV (請確認這裡的檔名跟你程式產出的一致)
+          # 1. 綁定基本資料的 CSV
+          # ⚠️ 注意：如果你在 Python 檔裡面把檔名改了，這裡的 tw_stock_info.csv 也要跟著改成你的新檔名！
           git add tw_stock_info.csv
           
-          # 1. 先把機器人抓到的資料 Commit 起來
+          # 2. 只有當資料有更新時才會 commit
           git diff --quiet && git diff --staged --quiet || git commit -m "🏢 自動更新公司基本資料 $(date +'%Y-%m-%d')"
           
-          # 2. 【關鍵修復】在 Push 之前，先拉取遠端最新進度並重新排列歷史紀錄
+          # 3. 【終極防護】先下載遠端最新進度並重新排列歷史紀錄，解決衝突
           git pull --rebase origin main
           
-          # 3. 確定沒有衝突後，推送上雲端
+          # 4. 推送上雲端
           git push
