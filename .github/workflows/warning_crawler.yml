@@ -1,0 +1,48 @@
+name: Warning & Disposal Crawler
+
+on:
+  schedule:
+    # 📝 台灣時間 19:15 執行 (UTC 11:15)，確保盤後處置名單已完全公布
+    - cron: '15 11 * * 1-5'
+  
+  # 🌟 允許手動點擊按鈕觸發
+  workflow_dispatch:
+
+# 強制宣告寫入權限
+permissions:
+  contents: write
+
+jobs:
+  scrape-warnings:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 取得程式碼 (Checkout)
+        uses: actions/checkout@v4
+        
+      - name: 🐍 設定 Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          
+      - name: 📦 安裝依賴套件
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pandas tqdm urllib3
+          
+      - name: 🚨 執行注意與處置股爬蟲
+        run: python warning_crawler.py
+        
+      - name: 💾 自動推播回 GitHub
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add tw_warning_data.csv
+          
+          # 若有新資料才 commit
+          git diff --quiet && git diff --staged --quiet || git commit -m "🚨 自動更新注意與處置股名單 $(date +'%Y-%m-%d')"
+          
+          # 防衝突機制
+          git pull --rebase origin main
+          git push
