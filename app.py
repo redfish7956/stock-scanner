@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import os
 import requests
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 # ==========================================
 # 1. 頁面與基本設定
@@ -18,11 +18,13 @@ footer {visibility: hidden;}
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
-# 取得檔案最後修改時間的輔助函式
+# 💡 【時區校正】：強制將伺服器 UTC 時間轉換為台灣時間 (UTC+8)
 def get_file_time_str(filepath):
     if os.path.exists(filepath):
         mtime = os.path.getmtime(filepath)
-        return datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')
+        tz_taiwan = timezone(timedelta(hours=8))
+        dt = datetime.fromtimestamp(mtime, tz=timezone.utc).astimezone(tz_taiwan)
+        return dt.strftime('%Y-%m-%d %H:%M:%S')
     return "尚未建立或找不到檔案"
 
 # ==========================================
@@ -45,6 +47,12 @@ def load_data(mtime):
             return pd.DataFrame()
             
         df['日期'] = pd.to_datetime(df['日期'])
+        
+        # 💡 【防呆強化】：確保所有數值欄位被正確解析為 Float 格式，防堵字串比對 Bug
+        numeric_cols = ['收盤價', '開盤價', '最高價', '最低價', '漲跌幅', '成交量', '本益比', '主力淨買超', '外資買賣超', '投信買賣超', '自營商買賣超']
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '').str.replace('--', ''), errors='coerce')
         
         if '成交量' in df.columns: df['成交量(張)'] = df['成交量'] / 1000
         if '主力淨買超' in df.columns: df['主力淨買超(張)'] = df['主力淨買超'] / 1000
@@ -169,7 +177,7 @@ cond6_days = st.sidebar.number_input("創高日數", min_value=2, value=5, disab
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚙️ 系統管理")
 
-# 取得三個系統檔案的最後更新時間
+# 取得三個系統檔案的最後更新時間 (已校正為台灣時間)
 time_price = get_file_time_str('tw_stock_data.csv')
 time_mops = get_file_time_str('mops_financial_history_8Q_ALL_DATA.csv')
 time_warn = get_file_time_str('tw_warning_data.csv')
@@ -235,13 +243,16 @@ if has_active_conditions:
         else:
             valid_stocks = set() 
 
+    # 💡 【時光機修復核心】：建立以目標觀測日期（target_date）為頂點的歷史數據集，解決 N 日邏輯與時光機脫節的問題
+    hist_df = df[df['日期'] <= target_date].copy()
+
     if use_cond1:
-        min_vols = df.groupby('代號')['成交量(張)'].head(cond1_days).groupby(df['代號']).min()
+        min_vols = hist_df.groupby('代號')['成交量(張)'].head(cond1_days).groupby(hist_df['代號']).min()
         valid_stocks = valid_stocks.intersection(set(min_vols[min_vols >= cond1_vol].index))
 
     if use_cond2:
-        today_vol = df.groupby('代號')['成交量(張)'].first()
-        past_N_mean = df.groupby('代號')['成交量(張)'].apply(lambda x: x.iloc[1:cond2_days+1].mean())
+        today_vol = hist_df.groupby('代號')['成交量(張)'].first()
+        past_N_mean = hist_df.groupby('代號')['成交量(張)'].apply(lambda x: x.iloc[1:cond2_days+1].mean())
         cond_met = today_vol > (past_N_mean * cond2_multi)
         valid_stocks = valid_stocks.intersection(set(cond_met[cond_met].index))
         dynamic_columns['前N日均量倍數'] = (today_vol / past_N_mean.replace(0, np.nan)).round(2)
@@ -250,9 +261,10 @@ if has_active_conditions:
         mask = (latest_df['本益比'] <= cond3_pe) & (latest_df['本益比'] > 0)
         valid_stocks = valid_stocks.intersection(set(latest_df[mask]['代號']))
 
+    # 💡 【條件 4 完全修復】：基於 hist_df 進行分組 head 取創高 N 日新高
     if use_cond4:
-        today_close = df.groupby('代號')['收盤價'].first()
-        max_closes = df.groupby('代號')['收盤價'].head(cond4_days).groupby(df['代號']).max()
+        today_close = hist_df.groupby('代號')['收盤價'].first()
+        max_closes = hist_df.groupby('代號')['收盤價'].head(cond4_days).groupby(hist_df['代號']).max()
         valid_stocks = valid_stocks.intersection(set(today_close[today_close >= max_closes].index))
 
     if use_cond5:
@@ -267,8 +279,8 @@ if has_active_conditions:
             st.warning("⚠️ 財報資料庫未載入，無法執行 EPS 篩選。")
 
     if use_cond6:
-        today_inst = df.groupby('代號')['主力淨買超(張)'].first()
-        max_inst = df.groupby('代號')['主力淨買超(張)'].head(cond6_days).groupby(df['代號']).max()
+        today_inst = hist_df.groupby('代號')['主力淨買超(張)'].first()
+        max_inst = hist_df.groupby('代號')['主力淨買超(張)'].head(cond6_days).groupby(hist_df['代號']).max()
         valid_stocks = valid_stocks.intersection(set(today_inst[today_inst >= max_inst].index))
 
 # ==========================================
@@ -289,12 +301,32 @@ if '漲跌百分比' in latest_df.columns:
     flat_count = len(latest_df) - up_count - down_count
     total_vol = latest_df['成交量(張)'].sum() if '成交量(張)' in latest_df.columns else 0
 
-    st.markdown("##### 📈 市場熱度總覽")
-    m1, m2, m3, m4 = st.columns(4)
+    # 💡 【加強】：尋找大盤指標（優先尋找 0000 / t00 / IX0001 / 加權指數 程式碼），找不到則動態計算均值趨勢
+    market_idx = latest_df[latest_df['代號'].isin(['0000', 't00', 'IX0001', '加權指數'])]
+
+    st.markdown("##### 📈 市場熱度與大盤總覽")
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
     m1.metric("🔥 上漲家數", f"{up_count} 家", f"含漲停 {limit_up} 家")
     m2.metric("🧊 下跌家數", f"{down_count} 家", f"含跌停 {limit_down} 家", delta_color="inverse")
     m3.metric("⚖️ 平盤家數", f"{flat_count} 家", delta_color="off")
-    m4.metric("💰 總成交張數", f"{total_vol / 10000:,.0f} 萬張", delta_color="off")
+    m4.metric("💰 總成交量", f"{total_vol / 10000:,.1f} 萬張", delta_color="off")
+    
+    if not market_idx.empty:
+        mclose = market_idx['收盤價'].values[0]
+        mchange = market_idx['漲跌幅'].values[0]
+        m_prev = mclose - mchange
+        mpct = (mchange / m_prev) * 100 if m_prev != 0 else 0
+        sign = "+" if mchange > 0 else ""
+        m5.metric("📊 大盤收盤", f"{mclose:,.2f}")
+        m6.metric("📉 大盤漲跌", f"{sign}{mchange:,.2f}", f"{sign}{mpct:.2f}%", delta_color="normal" if mchange >= 0 else "inverse")
+    else:
+        avg_close = latest_df['收盤價'].mean()
+        avg_change = latest_df['漲跌幅'].mean()
+        avg_prev = avg_close - avg_change
+        avg_pct = (avg_change / avg_prev) * 100 if avg_prev != 0 else 0
+        sign = "+" if avg_change > 0 else ""
+        m5.metric("📊 大盤收盤", f"{avg_close:,.2f} (均值)")
+        m6.metric("📉 大盤漲跌", f"{sign}{avg_change:,.2f}", f"{sign}{avg_pct:.2f}%", delta_color="normal" if avg_change >= 0 else "inverse")
 
 st.markdown("---")
 
