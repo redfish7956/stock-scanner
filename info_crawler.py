@@ -3,8 +3,9 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import pandas as pd
 import time
+from datetime import datetime # ⏳ 新增時間模組
 
-print("【系統啟動】台股基本資料爬蟲 (Info Crawler v1.3 - 終極字典對位版)...")
+print("【系統啟動】台股基本資料爬蟲 (Info Crawler v1.4 - 時間戳記版)...")
 
 INFO_CSV_PATH = 'tw_stock_info.csv'
 headers = {'User-Agent': 'Mozilla/5.0'}
@@ -93,6 +94,17 @@ if not df_twse.empty or not df_tpex.empty:
     cond_fund = df_all['代號'].str.match(r'^(00|01|02)')
     df_all = df_all[cond_stock | cond_fund].copy()
 
+    # ⏳ 新增更新日期
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    df_all['更新日期'] = today_str
+
+    # 📏 黃金比例排版 (自訂欄位順序)
+    final_cols = ['代號', '更新日期', '名稱', '市場別', '產業別', '實收資本額', '發行股數']
+    # 確保只取 df 裡確實有的欄位，避免報錯
+    final_cols = [c for c in final_cols if c in df_all.columns]
+    df_all = df_all[final_cols]
+
+    # 排序並輸出
     df_all = df_all.sort_values(by=['代號'])
     df_all.to_csv(INFO_CSV_PATH, index=False, encoding='utf-8-sig')
     
