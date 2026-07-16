@@ -56,7 +56,6 @@ print("📅 正在同步台灣證交所官方開盤日曆 (精準排除颱風、
 master_trading_dates = []
 current_date = datetime.now()
 
-# 往前抓 7 個月的「大盤成交資訊」建立上帝視角
 for _ in range(7):
     api_month = current_date.strftime("%Y%m01")
     url = f"https://www.twse.com.tw/rwd/zh/afterTrading/FMTQIK?date={api_month}&response=json"
@@ -125,7 +124,8 @@ for count, dt in enumerate(valid_dates, 1):
                 for i in range(1, 20):
                     if f'fields{i}' in res_fb and f'data{i}' in res_fb:
                         if '證券代號' in res_fb[f'fields{i}']:
-                            target_fields = res_fb[f'fields{i}']:
+                            # 🛡️ 修復點：移除了這行結尾不該存在的冒號！
+                            target_fields = res_fb[f'fields{i}']
                             target_data = res_fb[f'data{i}']
                             break
                 if not target_data:
