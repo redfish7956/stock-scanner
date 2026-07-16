@@ -1,74 +1,98 @@
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import pandas as pd
-import os
+import time
 
-print("【系統啟動】台股基本資料爬蟲 (Info Crawler v1.0 - 靜態資料建立)...")
+print("【系統啟動】台股基本資料爬蟲 (Info Crawler v1.3 - 終極字典對位版)...")
 
 INFO_CSV_PATH = 'tw_stock_info.csv'
+headers = {'User-Agent': 'Mozilla/5.0'}
 
-# ==========================================
-# 1. 抓取上市 (TWSE) 基本資料
-# ==========================================
-print("⏳ 正在抓取上市 (TWSE) 公司基本資料...")
-twse_url = "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
-try:
-    res_twse = requests.get(twse_url, timeout=15).json()
-    df_twse = pd.DataFrame(res_twse)
+# 🛡️ 建立強固的網路連線 Session
+session = requests.Session()
+retry_strategy = Retry(total=3, status_forcelist=[429, 500, 502, 503, 504], backoff_factor=2)
+session.mount("https://", HTTPAdapter(max_retries=retry_strategy))
+
+# 💡 台股產業別翻譯字典
+INDUSTRY_MAP = {
+    '01': '水泥工業', '02': '食品工業', '03': '塑膠工業', '04': '紡織纖維',
+    '05': '電機機械', '06': '電器電纜', '07': '化學工業', '08': '玻璃陶瓷',
+    '09': '造紙工業', '10': '鋼鐵工業', '11': '橡膠工業', '12': '汽車工業',
+    '14': '建材營造', '15': '航運業', '16': '觀光餐旅', '17': '金融保險',
+    '18': '貿易百貨', '19': '綜合', '20': '其他', '21': '化學工業',
+    '22': '生技醫療業', '23': '油電燃氣業', '24': '半導體業', '25': '電腦及週邊',
+    '26': '光電業', '27': '通信網路業', '28': '電子零組件', '29': '電子通路業',
+    '30': '資訊服務業', '31': '其他電子業', '32': '文化創意業', '33': '農業科技業',
+    '34': '電子商務業', '35': '綠能環保', '36': '數位雲端', '37': '運動休閒',
+    '38': '居家生活'
+}
+
+def process_api_data(url, market_name):
+    print(f"⏳ 正在抓取{market_name}公司基本資料...")
+    MAX_RETRIES = 3
     
-    # 篩選並重新命名需要的欄位
-    df_twse = df_twse[['公司代號', '公司名稱', '產業別', '實收資本額', '已發行普通股數或TDR原股發行股數']]
-    df_twse = df_twse.rename(columns={
-        '公司代號': '代號',
-        '公司名稱': '名稱',
-        '已發行普通股數或TDR原股發行股數': '發行股數'
-    })
-    df_twse['市場別'] = '上市'
-    print(f"  ✅ 上市抓取成功: 共 {len(df_twse)} 筆")
-except Exception as e:
-    print(f"  ❌ 上市抓取失敗: {e}")
-    df_twse = pd.DataFrame()
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            res = session.get(url, headers=headers, timeout=20)
+            res.raise_for_status()
+            df = pd.DataFrame(res.json())
+            
+            # 💡 精準對位：依照 X 光機顯示的實際欄位填寫
+            col_mapping = {
+                '公司代號': '代號', 'SecuritiesCompanyCode': '代號',
+                '公司名稱': '名稱', 'CompanyName': '名稱',
+                '產業別': '產業別', 'SecuritiesIndustryCode': '產業別',
+                '實收資本額': '實收資本額', 'Paidin.Capital.NTDollars': '實收資本額',
+                '已發行普通股數或TDR原股發行股數': '發行股數', 'IssueShares': '發行股數'
+            }
+            
+            df = df.rename(columns=col_mapping)
+            
+            # 嚴格選取需要的 5 個核心欄位
+            target_cols = ['代號', '名稱', '產業別', '實收資本額', '發行股數']
+            existing_cols = [c for c in target_cols if c in df.columns]
+            df = df[existing_cols]
+            
+            # 💡 翻譯產業別代碼
+            if '產業別' in df.columns:
+                df['產業別'] = df['產業別'].map(INDUSTRY_MAP).fillna(df['產業別'])
+                
+            df['市場別'] = market_name
+            print(f"  ✅ {market_name}抓取成功: 共 {len(df)} 筆")
+            return df
+            
+        except Exception as e:
+            print(f"  ⚠️ 第 {attempt} 次嘗試失敗 ({type(e).__name__})，等待重試...")
+            time.sleep(3)
+            
+    print(f"  ❌ {market_name}已達最大重試次數，抓取放棄。")
+    return pd.DataFrame()
 
 # ==========================================
-# 2. 抓取上櫃 (TPEx) 基本資料
+# 1. 執行雙市場抓取
 # ==========================================
-print("\n⏳ 正在抓取上櫃 (TPEx) 公司基本資料...")
-tpex_url = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O"
-try:
-    res_tpex = requests.get(tpex_url, timeout=15).json()
-    df_tpex = pd.DataFrame(res_tpex)
-    
-    # 篩選並重新命名需要的欄位
-    df_tpex = df_tpex[['公司代號', '公司名稱', '產業別', '實收資本額', '已發行普通股數或TDR原股發行股數']]
-    df_tpex = df_tpex.rename(columns={
-        '公司代號': '代號',
-        '公司名稱': '名稱',
-        '已發行普通股數或TDR原股發行股數': '發行股數'
-    })
-    df_tpex['市場別'] = '上櫃'
-    print(f"  ✅ 上櫃抓取成功: 共 {len(df_tpex)} 筆")
-except Exception as e:
-    print(f"  ❌ 上櫃抓取失敗: {e}")
-    df_tpex = pd.DataFrame()
+df_twse = process_api_data("https://openapi.twse.com.tw/v1/opendata/t187ap03_L", "上市")
+time.sleep(2)
+df_tpex = process_api_data("https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O", "上櫃")
 
 # ==========================================
-# 3. 合併與資料清洗
+# 2. 合併與資料清洗
 # ==========================================
 if not df_twse.empty or not df_tpex.empty:
     df_all = pd.concat([df_twse, df_tpex], ignore_index=True)
     
-    # 清洗：去除代號前後空白
     df_all['代號'] = df_all['代號'].astype(str).str.strip()
     
-    # 清洗：將資本額與股數轉為乾淨的數值
     for col in ['實收資本額', '發行股數']:
-        df_all[col] = pd.to_numeric(df_all[col].astype(str).str.replace(',', ''), errors='coerce')
+        if col in df_all.columns:
+            df_all[col] = pd.to_numeric(df_all[col].astype(str).str.replace(',', ''), errors='coerce')
     
-    # 白名單過濾：只保留普通股 (4碼)、ETF (00開頭) 等
+    # 排除權證與特殊雜訊
     cond_stock = df_all['代號'].str.len() <= 5
     cond_fund = df_all['代號'].str.match(r'^(00|01|02)')
     df_all = df_all[cond_stock | cond_fund].copy()
 
-    # 排序並輸出
     df_all = df_all.sort_values(by=['代號'])
     df_all.to_csv(INFO_CSV_PATH, index=False, encoding='utf-8-sig')
     
