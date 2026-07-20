@@ -67,15 +67,19 @@ def load_data(mtime):
         st.error(f"資料讀取失敗。錯誤: {e}")
         return pd.DataFrame()
 
-# 💡 擴充加載其餘核心數據庫
+# 💡 擴充加載其餘核心數據庫，並修正大盤欄位名稱
 @st.cache_data(ttl=3600)
 def load_supplementary_files():
     index_df = pd.read_csv('tw_index_data.csv') if os.path.exists('tw_index_data.csv') else pd.DataFrame()
+    if not index_df.empty: 
+        index_df['日期'] = pd.to_datetime(index_df['日期'])
+        # 強制標準化大盤欄位名稱，防堵 KeyError
+        index_df = index_df.rename(columns={'收盤價': '指數收盤價', '漲跌點數': '大盤漲跌幅'})
+        
     info_df = pd.read_csv('tw_stock_info.csv', dtype={'代號': str}) if os.path.exists('tw_stock_info.csv') else pd.DataFrame()
     warning_df = pd.read_csv('tw_warning_data.csv', dtype={'代號': str}) if os.path.exists('tw_warning_data.csv') else pd.DataFrame()
     daytrade_df = pd.read_csv('tw_daytrade_data.csv', dtype={'代號': str}) if os.path.exists('tw_daytrade_data.csv') else pd.DataFrame()
     
-    if not index_df.empty: index_df['日期'] = pd.to_datetime(index_df['日期'])
     if not warning_df.empty: warning_df['日期'] = pd.to_datetime(warning_df['日期'])
     if not daytrade_df.empty: daytrade_df['日期'] = pd.to_datetime(daytrade_df['日期'])
     
@@ -302,7 +306,7 @@ if has_active_conditions:
 
 
 # ==========================================
-# 💡 處置預判核心大腦與日期演算引擎
+# 💡 處置預判核心大腦與日期演算引擎 (全新推演模擬架構)
 # ==========================================
 def parse_disposal_text(raw_text):
     """解析原始資料，提取處置分盤分鐘與營業日數"""
@@ -345,10 +349,10 @@ def compute_disposal_risk(row, target_dt, warn_df, trading_days_list):
         return "🟩 狀態正常", 99, {}
         
     t_idx = trading_days_list.index(target_dt)
-    stock_warns = warn_df[(warn_df['代號'] == code) & (warn_df['日期'] <= target_dt)].sort_values('日期', ascending=False)
+    stock_warns = warn_df[(warn_df['代號'] == code) & (warn_df['日期'] <= target_dt)]
     
     # 1. 檢查是否正在處置中
-    disp_history = stock_warns[stock_warns['狀態'] == '處置']
+    disp_history = stock_warns[stock_warns['狀態'] == '處置'].sort_values('日期', ascending=False)
     if not disp_history.empty:
         latest_disp = disp_history.iloc[0]
         disp_dt = latest_disp['日期'].to_pydatetime()
@@ -368,38 +372,65 @@ def compute_disposal_risk(row, target_dt, warn_df, trading_days_list):
                     'rem_days': end_idx - t_idx
                 }
 
-    # 2. 檢查注意紀錄與處置預判
+    # 將歷史注意日期轉換為 index，大幅提升運算效能與準確度
     warn_dates = set(stock_warns[stock_warns['狀態'] == '注意']['日期'].dt.to_pydatetime())
+    warn_indices = set(trading_days_list.index(d) for d in warn_dates if d in trading_days_list)
     
-    window_30 = trading_days_list[max(0, t_idx-29):t_idx+1]
-    window_10 = trading_days_list[max(0, t_idx-9):t_idx+1]
-    
-    count_30 = sum(1 for d in window_30 if d in warn_dates)
-    count_10 = sum(1 for d in window_10 if d in warn_dates)
-    
-    consec_count = 0
-    for i in range(t_idx, max(-1, t_idx-5), -1):
-        if trading_days_list[i] in warn_dates: consec_count += 1
+    # 計算截至當下 (t_idx) 的真實次數
+    c3 = 0
+    for i in range(t_idx, max(-1, t_idx-3), -1):
+        if i in warn_indices: c3 += 1
         else: break
         
-    # 判斷是否今日盤後已達標 (明日進處置)
-    if consec_count >= 3 or count_10 >= 6 or count_30 >= 12:
-        return "🚨 明日進入處置", 0, {'status': 'triggered', 'c3': consec_count, 'c10': count_10, 'c30': count_30}
+    c10 = sum(1 for i in range(t_idx, max(-1, t_idx-10), -1) if i in warn_indices)
+    c30 = sum(1 for i in range(t_idx, max(-1, t_idx-30), -1) if i in warn_indices)
+    
+    # 💡 絕對過濾：如果目前完全沒有任何注意紀錄，這檔股票就不可能在短期內處置
+    if c3 == 0 and c10 == 0 and c30 == 0:
+        return "🟩 狀態正常", 99, {'c3': 0, 'c10': 0, 'c30': 0}
+
+    # 判斷是否今日收盤後已滿足處置條件 (準備明日處置)
+    if c3 >= 3 or c10 >= 6 or c30 >= 12:
+        return "🚨 明日進入處置", 0, {'status': 'triggered', 'c3': c3, 'c10': c10, 'c30': c30}
         
-    req_consec = 3 - consec_count if consec_count > 0 else 3 
-    req_10 = 6 - count_10
-    req_30 = 12 - count_30
-    min_steps = min(req_consec, req_10, req_30)
+    # 💡 核心修正：未來日曆推演模擬 (Sliding Window Forward Simulation)
+    # 我們只預測未來 1~3 天 (超過 3 天的預測沒有實質風控意義)
+    min_days_to_trigger = 99
     
-    details = {'status': 'warning', 'c3': consec_count, 'c10': count_10, 'c30': count_30, 'req_min': min_steps}
+    for future_days in range(1, 4):
+        sim_t_idx = t_idx + future_days
+        
+        # 模擬連續 3 日：(原本連續次數 + 假設未來連續天數)
+        sim_c3 = c3 + future_days
+        
+        # 模擬 10 日視窗：視窗會跟著平移！(新的視窗起點 = 模擬日 - 9)
+        hist_start_10 = sim_t_idx - 9
+        # 計算落在「新視窗內」的『歷史』注意次數 (未過期的)
+        valid_hist_10 = sum(1 for i in range(t_idx, max(-1, hist_start_10-1), -1) if i in warn_indices)
+        # 加上假設未來每天都注意的次數
+        sim_c10 = valid_hist_10 + future_days
+        
+        # 模擬 30 日視窗：
+        hist_start_30 = sim_t_idx - 29
+        valid_hist_30 = sum(1 for i in range(t_idx, max(-1, hist_start_30-1), -1) if i in warn_indices)
+        sim_c30 = valid_hist_30 + future_days
+        
+        # 在這一天是否達標？
+        if sim_c3 >= 3 or sim_c10 >= 6 or sim_c30 >= 12:
+            min_days_to_trigger = future_days
+            break
+            
+    details = {'status': 'warning', 'c3': c3, 'c10': c10, 'c30': c30, 'req_min': min_days_to_trigger}
     
-    if min_steps == 1:
+    if min_days_to_trigger == 1:
         return "⚠️ 明日若注意即達處置", 1, details
-    elif min_steps <= 3:
-        future_date = get_future_date_str(t_idx, min_steps, trading_days_list)
-        return f"⚠️ 最快 {min_steps} 日後({future_date})處置", min_steps, details
+    elif min_days_to_trigger <= 3:
+        future_date = get_future_date_str(t_idx, min_days_to_trigger, trading_days_list)
+        return f"⚠️ 最快 {min_days_to_trigger} 日後({future_date})達標", min_days_to_trigger, details
+    elif c3 > 0 or c10 >= 2 or c30 >= 4:
+        return "🟨 警戒狀態 (持續監控中)", 99, details
     else:
-        return f"🟩 狀態正常 (安全期>{min_steps}日)", min_steps, details
+        return "🟩 狀態正常", 99, details
 
 # ==========================================
 # 6. 右側主畫面 (Main Area)
