@@ -1,0 +1,48 @@
+name: 每日處置狀態運算引擎 (Daily Calculator)
+
+on:
+  schedule:
+    # 排程時間必須設定在您 5 支爬蟲都執行完畢之後。
+    # 假設爬蟲是台灣時間 18:00 執行，我們這裡設定 18:30 執行。
+    # 注意：GitHub Actions 使用 UTC 時間 (台灣時間減 8 小時)。
+    # 台灣 18:30 = UTC 10:30。 (1-5 代表週一至週五)
+    - cron: '30 10 * * 1-5' 
+  
+  # 保留手動觸發按鈕，方便我們初期隨時點擊測試
+  workflow_dispatch: 
+
+jobs:
+  run-calculator-and-update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # 賦予 GitHub Actions 覆寫與推播檔案的權限
+
+    steps:
+      - name: 1. 取得最新儲存庫程式碼與資料 (Checkout repository)
+        uses: actions/checkout@v4
+
+      - name: 2. 建立 Python 環境 (Set up Python)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10' # 可依據您原本的環境調整
+
+      - name: 3. 安裝必要套件 (Install dependencies)
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas # 如果後續腳本有用到其他套件 (如 numpy) 也加在這裡
+
+      - name: 4. 執行核心運算引擎 (Run daily calculator)
+        run: python daily_calculator.py
+
+      - name: 5. 將算好的 CSV 覆蓋並推播回 GitHub (Commit and Push)
+        run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # 將產出的主檔加入追蹤
+          git add tw_disposal_master.csv
+          
+          # 如果檔案內容有變動才 commit，避免因為沒變動而報錯導致流程中斷
+          git commit -m "Auto-update: 台股處置預測主檔 (tw_disposal_master.csv)" || exit 0
+          
+          git push
