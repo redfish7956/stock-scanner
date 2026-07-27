@@ -560,10 +560,19 @@ else:
                 import plotly.graph_objects as go
                 from plotly.subplots import make_subplots
 
-                # 使用最穩定的 Plotly 引擎，無懼資料缺失
+                # 💡 核心解法：把區間切換做在「圖表外部」，這也是最安全、100%不會報錯的寫法
+                time_range = st.radio(
+                    "📅 快速縮放區間 (完美自動適應大小)", 
+                    ["近 20 日", "近 60 日 (一季)", "近 120 日 (半年)", "全部顯示"], 
+                    horizontal=True,
+                    key=f"tr_{sel_code}"
+                )
+
+                # 取出該股票的所有歷史資料，強制排序
                 chart_df = df[df['代號'] == sel_code].sort_values('日期', ascending=True).copy()
                 
                 if not chart_df.empty:
+                    # 先計算全部資料的均線，避免裁切後產生均線斷層
                     chart_df['MA5'] = chart_df['收盤價'].rolling(window=5).mean()
                     chart_df['MA10'] = chart_df['收盤價'].rolling(window=10).mean()
                     chart_df['MA20'] = chart_df['收盤價'].rolling(window=20).mean()
@@ -571,6 +580,15 @@ else:
                     
                     chart_df['VMA5'] = chart_df['成交量(張)'].rolling(window=5).mean()
                     chart_df['VMA20'] = chart_df['成交量(張)'].rolling(window=20).mean()
+
+                    # 💡 依照你按下的按鈕，在真正畫圖前把多餘的資料「砍掉」
+                    # 這樣 Plotly 畫圖時，就會把這段期間的最高與最低價當作絕對邊界，完美把 K 線放大撐滿！
+                    if time_range == "近 20 日":
+                        chart_df = chart_df.tail(20)
+                    elif time_range == "近 60 日 (一季)":
+                        chart_df = chart_df.tail(60)
+                    elif time_range == "近 120 日 (半年)":
+                        chart_df = chart_df.tail(120)
 
                     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
                                         vertical_spacing=0.05, 
@@ -600,31 +618,14 @@ else:
                     fig.add_trace(go.Scatter(x=chart_df['日期'], y=chart_df['VMA20'], mode='lines', name='20日均量', line=dict(color='purple', width=1.5)), row=2, col=1)
 
                     fig.update_layout(
-                        title=f"{sel_name} ({sel_code}) 近 120 日技術分析線圖",
+                        title=f"{sel_name} ({sel_code}) {time_range} 技術分析",
                         yaxis_title="股價 (元)",
                         yaxis2_title="成交量 (張)",
-                        xaxis_rangeslider_visible=False,
+                        xaxis_rangeslider_visible=False, # 關閉底下佔空間的滑桿
                         height=600,
                         margin=dict(l=50, r=50, b=50, t=50),
                         hovermode='x unified',
-                        template="plotly_white",
-                        # 💡 在此加入原生的快速區間選擇按鈕
-                        xaxis=dict(
-                            rangeselector=dict(
-                                buttons=list([
-                                    dict(count=5, label="近 5 日", step="day", stepmode="backward"),
-                                    dict(count=20, label="近 20 日", step="day", stepmode="backward"),
-                                    dict(count=3, label="近一季", step="month", stepmode="backward"),
-                                    dict(count=6, label="近半年", step="month", stepmode="backward"),
-                                    dict(step="all", label="全部顯示")
-                                ]),
-                                bgcolor="#f8f9fa",
-                                activecolor="#e5e7eb",
-                                bordercolor="#d1d5db",
-                                borderwidth=1
-                            ),
-                            type="date"
-                        )
+                        template="plotly_white"
                     )
                     
                     # 過濾假日斷層
