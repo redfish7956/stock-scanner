@@ -554,7 +554,69 @@ else:
             st.markdown("---")
             st.markdown(f"#### 🔍 【{sel_code} {sel_name}】深度中樞診斷面板")
             
-            tab_filter, tab_disposal = st.tabs(["📈 量化條件診斷", "🚨 處置防護線與注意紀錄追蹤"])
+            tab_chart, tab_filter, tab_disposal = st.tabs(["📊 技術分析線圖", "📈 量化條件診斷", "🚨 處置防護線與注意紀錄追蹤"])
+            
+            with tab_chart:
+                import plotly.graph_objects as go
+                from plotly.subplots import make_subplots
+
+                chart_df = df[df['代號'] == sel_code].sort_values('日期', ascending=True).copy()
+                
+                if not chart_df.empty:
+                    chart_df['MA5'] = chart_df['收盤價'].rolling(window=5).mean()
+                    chart_df['MA10'] = chart_df['收盤價'].rolling(window=10).mean()
+                    chart_df['MA20'] = chart_df['收盤價'].rolling(window=20).mean()
+                    chart_df['MA60'] = chart_df['收盤價'].rolling(window=60).mean()
+                    
+                    chart_df['VMA5'] = chart_df['成交量(張)'].rolling(window=5).mean()
+                    chart_df['VMA20'] = chart_df['成交量(張)'].rolling(window=20).mean()
+
+                    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
+                                        vertical_spacing=0.05, 
+                                        row_heights=[0.7, 0.3])
+
+                    color_up = '#FF3333'
+                    color_down = '#00AA00'
+
+                    fig.add_trace(go.Candlestick(
+                        x=chart_df['日期'],
+                        open=chart_df['開盤價'], high=chart_df['最高價'],
+                        low=chart_df['最低價'], close=chart_df['收盤價'],
+                        name='K線',
+                        increasing_line_color=color_up, increasing_fillcolor=color_up,
+                        decreasing_line_color=color_down, decreasing_fillcolor=color_down
+                    ), row=1, col=1)
+
+                    fig.add_trace(go.Scatter(x=chart_df['日期'], y=chart_df['MA5'], mode='lines', name='5MA', line=dict(color='orange', width=1.5)), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=chart_df['日期'], y=chart_df['MA10'], mode='lines', name='10MA', line=dict(color='blue', width=1.5)), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=chart_df['日期'], y=chart_df['MA20'], mode='lines', name='20MA(月線)', line=dict(color='purple', width=1.5)), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=chart_df['日期'], y=chart_df['MA60'], mode='lines', name='60MA(季線)', line=dict(color='green', width=1.5)), row=1, col=1)
+
+                    colors_vol = [color_up if row['收盤價'] >= row['開盤價'] else color_down for index, row in chart_df.iterrows()]
+                    fig.add_trace(go.Bar(x=chart_df['日期'], y=chart_df['成交量(張)'], name='成交量', marker_color=colors_vol, opacity=0.8), row=2, col=1)
+
+                    fig.add_trace(go.Scatter(x=chart_df['日期'], y=chart_df['VMA5'], mode='lines', name='5日均量', line=dict(color='orange', width=1.5)), row=2, col=1)
+                    fig.add_trace(go.Scatter(x=chart_df['日期'], y=chart_df['VMA20'], mode='lines', name='20日均量', line=dict(color='purple', width=1.5)), row=2, col=1)
+
+                    fig.update_layout(
+                        title=f"{sel_name} ({sel_code}) 近 120 日技術分析線圖",
+                        yaxis_title="股價 (元)",
+                        yaxis2_title="成交量 (張)",
+                        xaxis_rangeslider_visible=False,
+                        height=600,
+                        margin=dict(l=50, r=50, b=50, t=50),
+                        hovermode='x unified',
+                        template="plotly_white"
+                    )
+                    
+                    dt_all = pd.date_range(start=chart_df['日期'].iloc[0], end=chart_df['日期'].iloc[-1])
+                    dt_obs = [d.strftime("%Y-%m-%d") for d in chart_df['日期']]
+                    dt_breaks = [d for d in dt_all.strftime("%Y-%m-%d").tolist() if not d in dt_obs]
+                    fig.update_xaxes(rangebreaks=[dict(values=dt_breaks)])
+
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.warning("無歷史資料可繪製 K 線圖。")
             
             stock_hist = df[(df['代號'] == sel_code) & (df['日期'] <= target_date)].head(30)
             
