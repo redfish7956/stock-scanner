@@ -560,9 +560,19 @@ else:
                 import json
                 import streamlit.components.v1 as components
                 
-                chart_df = df[df['代號'] == sel_code].sort_values('日期', ascending=True).copy()
+                # 取出該股票的所有歷史資料
+                chart_df = df[df['代號'] == sel_code].copy()
+                
+                # 🛡️ 1. 資料清洗核心防護：清除重複日期並強制以時間升冪排序 (TradingView 強制要求)
+                chart_df = chart_df.drop_duplicates(subset=['日期']).sort_values('日期', ascending=True)
+                
+                # 🛡️ 2. 清除價格缺失值：只要遇到 NaN，JSON 傳到 JS 時圖表就會徹底罷工白畫面
+                chart_df = chart_df.dropna(subset=['開盤價', '最高價', '最低價', '收盤價'])
                 
                 if not chart_df.empty:
+                    # 成交量若為空，補 0 避免報錯
+                    chart_df['成交量(張)'] = chart_df['成交量(張)'].fillna(0)
+
                     # 計算均線
                     chart_df['MA5'] = chart_df['收盤價'].rolling(window=5).mean()
                     chart_df['MA10'] = chart_df['收盤價'].rolling(window=10).mean()
@@ -583,7 +593,7 @@ else:
                         color = 'rgba(255, 51, 51, 0.6)' if row['收盤價'] >= row['開盤價'] else 'rgba(0, 170, 0, 0.6)'
                         vol_data.append({'time': row['DateStr'], 'value': row['成交量(張)'], 'color': color})
 
-                    # 3. 準備均線資料 (需排除 NaN 避免圖表報錯)
+                    # 3. 準備均線資料 (需排除均線剛開始計算時的 NaN，避免傳遞無效數據)
                     def get_ma_data(col_name):
                         return chart_df.dropna(subset=[col_name])[['DateStr', col_name]].rename(
                             columns={'DateStr':'time', col_name:'value'}
@@ -596,7 +606,7 @@ else:
                     js_ma20 = json.dumps(get_ma_data('MA20'))
                     js_ma60 = json.dumps(get_ma_data('MA60'))
 
-                    # 建立 TradingView HTML 模板與腳本
+                    # 建立 TradingView HTML 模板與腳本 (加入 try-catch 防止全白)
                     html_content = f"""
                     <!DOCTYPE html>
                     <html>
@@ -615,61 +625,69 @@ else:
                     <body>
                         <div class="toolbar">
                             <span class="toolbar-label">快速縮放：</span>
-                            <button class="btn" onclick="setRange(5)">近 5 日</button>
-                            <button class="btn" onclick="setRange(20)">近 20 日</button>
-                            <button class="btn" onclick="setRange(60)">近一季</button>
-                            <button class="btn" onclick="setRange(120)">近半年</button>
-                            <button class="btn" onclick="setRange(9999)">全部顯示</button>
+                            <button class="btn" onclick="window.setRange(5)">近 5 日</button>
+                            <button class="btn" onclick="window.setRange(20)">近 20 日</button>
+                            <button class="btn" onclick="window.setRange(60)">近一季</button>
+                            <button class="btn" onclick="window.setRange(120)">近半年</button>
+                            <button class="btn" onclick="window.setRange(9999)">全部顯示</button>
                         </div>
                         <div id="tvchart"></div>
+                        
                         <script>
-                            const chart = LightweightCharts.createChart(document.getElementById('tvchart'), {{
-                                layout: {{ textColor: '#333', background: {{ type: 'solid', color: '#ffffff' }} }},
-                                crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
-                                rightPriceScale: {{ scaleMargins: {{ top: 0.1, bottom: 0.25 }}, borderVisible: false }},
-                                timeScale: {{ borderVisible: false, timeVisible: true, fixLeftEdge: true }},
-                                grid: {{ vertLines: {{ color: '#f0f3fa' }}, horzLines: {{ color: '#f0f3fa' }} }}
-                            }});
+                            try {{
+                                const chart = LightweightCharts.createChart(document.getElementById('tvchart'), {{
+                                    layout: {{ textColor: '#333', background: {{ type: 'solid', color: '#ffffff' }} }},
+                                    crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
+                                    rightPriceScale: {{ scaleMargins: {{ top: 0.1, bottom: 0.25 }}, borderVisible: false }},
+                                    timeScale: {{ borderVisible: false, timeVisible: true, fixLeftEdge: true }},
+                                    grid: {{ vertLines: {{ color: '#f0f3fa' }}, horzLines: {{ color: '#f0f3fa' }} }}
+                                }});
 
-                            new ResizeObserver(entries => {{
-                                if (entries.length === 0 || entries[0].target !== document.getElementById('tvchart')) return;
-                                const newRect = entries[0].contentRect;
-                                chart.applyOptions({{ width: newRect.width, height: newRect.height }});
-                            }}).observe(document.getElementById('tvchart'));
+                                new ResizeObserver(entries => {{
+                                    if (entries.length === 0 || entries[0].target !== document.getElementById('tvchart')) return;
+                                    const newRect = entries[0].contentRect;
+                                    chart.applyOptions({{ width: newRect.width, height: newRect.height }});
+                                }}).observe(document.getElementById('tvchart'));
 
-                            const candleSeries = chart.addCandlestickSeries({{
-                                upColor: '#FF3333', downColor: '#00AA00', borderVisible: false,
-                                wickUpColor: '#FF3333', wickDownColor: '#00AA00'
-                            }});
-                            candleSeries.setData({js_candle});
+                                const candleSeries = chart.addCandlestickSeries({{
+                                    upColor: '#FF3333', downColor: '#00AA00', borderVisible: false,
+                                    wickUpColor: '#FF3333', wickDownColor: '#00AA00'
+                                }});
+                                candleSeries.setData({js_candle});
 
-                            const volumeSeries = chart.addHistogramSeries({{
-                                priceFormat: {{ type: 'volume' }},
-                                priceScaleId: '',
-                            }});
-                            volumeSeries.priceScale().applyOptions({{ scaleMargins: {{ top: 0.8, bottom: 0 }} }});
-                            volumeSeries.setData({js_vol});
+                                const volumeSeries = chart.addHistogramSeries({{
+                                    priceFormat: {{ type: 'volume' }},
+                                    priceScaleId: '',
+                                }});
+                                volumeSeries.priceScale().applyOptions({{ scaleMargins: {{ top: 0.8, bottom: 0 }} }});
+                                volumeSeries.setData({js_vol});
 
-                            const ma5Series = chart.addLineSeries({{ color: 'orange', lineWidth: 2, title: '5MA', crosshairMarkerVisible: false }});
-                            ma5Series.setData({js_ma5});
-                            
-                            const ma10Series = chart.addLineSeries({{ color: 'blue', lineWidth: 2, title: '10MA', crosshairMarkerVisible: false }});
-                            ma10Series.setData({js_ma10});
-                            
-                            const ma20Series = chart.addLineSeries({{ color: 'purple', lineWidth: 2, title: '20MA', crosshairMarkerVisible: false }});
-                            ma20Series.setData({js_ma20});
-                            
-                            const ma60Series = chart.addLineSeries({{ color: 'green', lineWidth: 2, title: '60MA', crosshairMarkerVisible: false }});
-                            ma60Series.setData({js_ma60});
+                                const ma5Series = chart.addLineSeries({{ color: 'orange', lineWidth: 2, title: '5MA', crosshairMarkerVisible: false }});
+                                ma5Series.setData({js_ma5});
+                                
+                                const ma10Series = chart.addLineSeries({{ color: 'blue', lineWidth: 2, title: '10MA', crosshairMarkerVisible: false }});
+                                ma10Series.setData({js_ma10});
+                                
+                                const ma20Series = chart.addLineSeries({{ color: 'purple', lineWidth: 2, title: '20MA', crosshairMarkerVisible: false }});
+                                ma20Series.setData({js_ma20});
+                                
+                                const ma60Series = chart.addLineSeries({{ color: 'green', lineWidth: 2, title: '60MA', crosshairMarkerVisible: false }});
+                                ma60Series.setData({js_ma60});
 
-                            function setRange(days) {{
-                                const dataLength = {len(chart_df)};
-                                const fromIndex = Math.max(0, dataLength - days);
-                                const toIndex = dataLength - 1;
-                                chart.timeScale().setVisibleLogicalRange({{ from: fromIndex, to: toIndex }});
+                                window.setRange = function(days) {{
+                                    const dataLength = {len(chart_df)};
+                                    if (dataLength > 0) {{
+                                        const fromIndex = Math.max(0, dataLength - days);
+                                        const toIndex = dataLength - 1;
+                                        chart.timeScale().setVisibleLogicalRange({{ from: fromIndex, to: toIndex }});
+                                    }}
+                                }};
+
+                                setTimeout(() => window.setRange(60), 100);
+                            }} catch (error) {{
+                                console.error(error);
+                                document.getElementById('tvchart').innerHTML = '<div style="color:red; padding:20px; font-weight:bold;">⚠️ 圖表渲染失敗！這通常是因為原始資料中包含無效的空值 (NaN) 或重複日期。</div>';
                             }}
-
-                            setTimeout(() => setRange(60), 50);
                         </script>
                     </body>
                     </html>
@@ -677,7 +695,7 @@ else:
                     
                     components.html(html_content, height=600)
                 else:
-                    st.warning("無歷史資料可繪製 K 線圖。")
+                    st.warning("清洗後無有效歷史資料可繪製 K 線圖。")
             
             stock_hist = df[(df['代號'] == sel_code) & (df['日期'] <= target_date)].head(30)
             
