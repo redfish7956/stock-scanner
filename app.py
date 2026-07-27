@@ -557,145 +557,85 @@ else:
             tab_chart, tab_filter, tab_disposal = st.tabs(["📊 技術分析線圖", "📈 量化條件診斷", "🚨 處置防護線與注意紀錄追蹤"])
             
             with tab_chart:
-                import json
-                import streamlit.components.v1 as components
-                
-                # 取出該股票的所有歷史資料
-                chart_df = df[df['代號'] == sel_code].copy()
-                
-                # 🛡️ 1. 資料清洗核心防護：清除重複日期並強制以時間升冪排序 (TradingView 強制要求)
-                chart_df = chart_df.drop_duplicates(subset=['日期']).sort_values('日期', ascending=True)
-                
-                # 🛡️ 2. 清除價格缺失值：只要遇到 NaN，JSON 傳到 JS 時圖表就會徹底罷工白畫面
-                chart_df = chart_df.dropna(subset=['開盤價', '最高價', '最低價', '收盤價'])
+                import plotly.graph_objects as go
+                from plotly.subplots import make_subplots
+
+                # 使用最穩定的 Plotly 引擎，無懼資料缺失
+                chart_df = df[df['代號'] == sel_code].sort_values('日期', ascending=True).copy()
                 
                 if not chart_df.empty:
-                    # 成交量若為空，補 0 避免報錯
-                    chart_df['成交量(張)'] = chart_df['成交量(張)'].fillna(0)
-
-                    # 計算均線
                     chart_df['MA5'] = chart_df['收盤價'].rolling(window=5).mean()
                     chart_df['MA10'] = chart_df['收盤價'].rolling(window=10).mean()
                     chart_df['MA20'] = chart_df['收盤價'].rolling(window=20).mean()
                     chart_df['MA60'] = chart_df['收盤價'].rolling(window=60).mean()
                     
-                    # 轉換日期格式符合 TradingView 需求 (YYYY-MM-DD)
-                    chart_df['DateStr'] = chart_df['日期'].dt.strftime('%Y-%m-%d')
+                    chart_df['VMA5'] = chart_df['成交量(張)'].rolling(window=5).mean()
+                    chart_df['VMA20'] = chart_df['成交量(張)'].rolling(window=20).mean()
 
-                    # 1. 準備 K 線資料
-                    candle_data = chart_df[['DateStr', '開盤價', '最高價', '最低價', '收盤價']].rename(
-                        columns={'DateStr':'time', '開盤價':'open', '最高價':'high', '最低價':'low', '收盤價':'close'}
-                    ).to_dict(orient='records')
+                    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
+                                        vertical_spacing=0.05, 
+                                        row_heights=[0.7, 0.3])
 
-                    # 2. 準備成交量資料 (上漲紅，下跌綠)
-                    vol_data = []
-                    for _, row in chart_df.iterrows():
-                        color = 'rgba(255, 51, 51, 0.6)' if row['收盤價'] >= row['開盤價'] else 'rgba(0, 170, 0, 0.6)'
-                        vol_data.append({'time': row['DateStr'], 'value': row['成交量(張)'], 'color': color})
+                    color_up = '#FF3333'
+                    color_down = '#00AA00'
 
-                    # 3. 準備均線資料 (需排除均線剛開始計算時的 NaN，避免傳遞無效數據)
-                    def get_ma_data(col_name):
-                        return chart_df.dropna(subset=[col_name])[['DateStr', col_name]].rename(
-                            columns={'DateStr':'time', col_name:'value'}
-                        ).to_dict(orient='records')
+                    fig.add_trace(go.Candlestick(
+                        x=chart_df['日期'],
+                        open=chart_df['開盤價'], high=chart_df['最高價'],
+                        low=chart_df['最低價'], close=chart_df['收盤價'],
+                        name='K線',
+                        increasing_line_color=color_up, increasing_fillcolor=color_up,
+                        decreasing_line_color=color_down, decreasing_fillcolor=color_down
+                    ), row=1, col=1)
 
-                    js_candle = json.dumps(candle_data)
-                    js_vol = json.dumps(vol_data)
-                    js_ma5 = json.dumps(get_ma_data('MA5'))
-                    js_ma10 = json.dumps(get_ma_data('MA10'))
-                    js_ma20 = json.dumps(get_ma_data('MA20'))
-                    js_ma60 = json.dumps(get_ma_data('MA60'))
+                    fig.add_trace(go.Scatter(x=chart_df['日期'], y=chart_df['MA5'], mode='lines', name='5MA', line=dict(color='orange', width=1.5)), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=chart_df['日期'], y=chart_df['MA10'], mode='lines', name='10MA', line=dict(color='blue', width=1.5)), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=chart_df['日期'], y=chart_df['MA20'], mode='lines', name='20MA(月線)', line=dict(color='purple', width=1.5)), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=chart_df['日期'], y=chart_df['MA60'], mode='lines', name='60MA(季線)', line=dict(color='green', width=1.5)), row=1, col=1)
 
-                    # 建立 TradingView HTML 模板與腳本 (加入 try-catch 防止全白)
-                    html_content = f"""
-                    <!DOCTYPE html>
-                    <html>
-                    <head>
-                        <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
-                        <style>
-                            body {{ margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #fff; }}
-                            .toolbar {{ display: flex; gap: 8px; padding: 12px; background: #f8f9fa; border-bottom: 1px solid #e0e0e0; align-items: center; }}
-                            .toolbar-label {{ font-size: 14px; font-weight: 600; color: #333; margin-right: 4px; }}
-                            .btn {{ padding: 6px 12px; cursor: pointer; border: 1px solid #d1d5db; background: #fff; border-radius: 6px; font-size: 13px; color: #374151; transition: all 0.2s; }}
-                            .btn:hover {{ background: #f3f4f6; border-color: #9ca3af; }}
-                            .btn:active {{ background: #e5e7eb; }}
-                            #tvchart {{ width: 100%; height: 520px; }}
-                        </style>
-                    </head>
-                    <body>
-                        <div class="toolbar">
-                            <span class="toolbar-label">快速縮放：</span>
-                            <button class="btn" onclick="window.setRange(5)">近 5 日</button>
-                            <button class="btn" onclick="window.setRange(20)">近 20 日</button>
-                            <button class="btn" onclick="window.setRange(60)">近一季</button>
-                            <button class="btn" onclick="window.setRange(120)">近半年</button>
-                            <button class="btn" onclick="window.setRange(9999)">全部顯示</button>
-                        </div>
-                        <div id="tvchart"></div>
-                        
-                        <script>
-                            try {{
-                                const chart = LightweightCharts.createChart(document.getElementById('tvchart'), {{
-                                    layout: {{ textColor: '#333', background: {{ type: 'solid', color: '#ffffff' }} }},
-                                    crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
-                                    rightPriceScale: {{ scaleMargins: {{ top: 0.1, bottom: 0.25 }}, borderVisible: false }},
-                                    timeScale: {{ borderVisible: false, timeVisible: true, fixLeftEdge: true }},
-                                    grid: {{ vertLines: {{ color: '#f0f3fa' }}, horzLines: {{ color: '#f0f3fa' }} }}
-                                }});
+                    colors_vol = [color_up if row['收盤價'] >= row['開盤價'] else color_down for index, row in chart_df.iterrows()]
+                    fig.add_trace(go.Bar(x=chart_df['日期'], y=chart_df['成交量(張)'], name='成交量', marker_color=colors_vol, opacity=0.8), row=2, col=1)
 
-                                new ResizeObserver(entries => {{
-                                    if (entries.length === 0 || entries[0].target !== document.getElementById('tvchart')) return;
-                                    const newRect = entries[0].contentRect;
-                                    chart.applyOptions({{ width: newRect.width, height: newRect.height }});
-                                }}).observe(document.getElementById('tvchart'));
+                    fig.add_trace(go.Scatter(x=chart_df['日期'], y=chart_df['VMA5'], mode='lines', name='5日均量', line=dict(color='orange', width=1.5)), row=2, col=1)
+                    fig.add_trace(go.Scatter(x=chart_df['日期'], y=chart_df['VMA20'], mode='lines', name='20日均量', line=dict(color='purple', width=1.5)), row=2, col=1)
 
-                                const candleSeries = chart.addCandlestickSeries({{
-                                    upColor: '#FF3333', downColor: '#00AA00', borderVisible: false,
-                                    wickUpColor: '#FF3333', wickDownColor: '#00AA00'
-                                }});
-                                candleSeries.setData({js_candle});
-
-                                const volumeSeries = chart.addHistogramSeries({{
-                                    priceFormat: {{ type: 'volume' }},
-                                    priceScaleId: '',
-                                }});
-                                volumeSeries.priceScale().applyOptions({{ scaleMargins: {{ top: 0.8, bottom: 0 }} }});
-                                volumeSeries.setData({js_vol});
-
-                                const ma5Series = chart.addLineSeries({{ color: 'orange', lineWidth: 2, title: '5MA', crosshairMarkerVisible: false }});
-                                ma5Series.setData({js_ma5});
-                                
-                                const ma10Series = chart.addLineSeries({{ color: 'blue', lineWidth: 2, title: '10MA', crosshairMarkerVisible: false }});
-                                ma10Series.setData({js_ma10});
-                                
-                                const ma20Series = chart.addLineSeries({{ color: 'purple', lineWidth: 2, title: '20MA', crosshairMarkerVisible: false }});
-                                ma20Series.setData({js_ma20});
-                                
-                                const ma60Series = chart.addLineSeries({{ color: 'green', lineWidth: 2, title: '60MA', crosshairMarkerVisible: false }});
-                                ma60Series.setData({js_ma60});
-
-                                window.setRange = function(days) {{
-                                    const dataLength = {len(chart_df)};
-                                    if (dataLength > 0) {{
-                                        const fromIndex = Math.max(0, dataLength - days);
-                                        const toIndex = dataLength - 1;
-                                        chart.timeScale().setVisibleLogicalRange({{ from: fromIndex, to: toIndex }});
-                                    }}
-                                }};
-
-                                setTimeout(() => window.setRange(60), 100);
-                            }} catch (error) {{
-                                console.error(error);
-                                document.getElementById('tvchart').innerHTML = '<div style="color:red; padding:20px; font-weight:bold;">⚠️ 圖表渲染失敗！這通常是因為原始資料中包含無效的空值 (NaN) 或重複日期。</div>';
-                            }}
-                        </script>
-                    </body>
-                    </html>
-                    """
+                    fig.update_layout(
+                        title=f"{sel_name} ({sel_code}) 近 120 日技術分析線圖",
+                        yaxis_title="股價 (元)",
+                        yaxis2_title="成交量 (張)",
+                        xaxis_rangeslider_visible=False,
+                        height=600,
+                        margin=dict(l=50, r=50, b=50, t=50),
+                        hovermode='x unified',
+                        template="plotly_white",
+                        # 💡 在此加入原生的快速區間選擇按鈕
+                        xaxis=dict(
+                            rangeselector=dict(
+                                buttons=list([
+                                    dict(count=5, label="近 5 日", step="day", stepmode="backward"),
+                                    dict(count=20, label="近 20 日", step="day", stepmode="backward"),
+                                    dict(count=3, label="近一季", step="month", stepmode="backward"),
+                                    dict(count=6, label="近半年", step="month", stepmode="backward"),
+                                    dict(step="all", label="全部顯示")
+                                ]),
+                                bgcolor="#f8f9fa",
+                                activecolor="#e5e7eb",
+                                bordercolor="#d1d5db",
+                                borderwidth=1
+                            ),
+                            type="date"
+                        )
+                    )
                     
-                    components.html(html_content, height=600)
+                    # 過濾假日斷層
+                    dt_all = pd.date_range(start=chart_df['日期'].iloc[0], end=chart_df['日期'].iloc[-1])
+                    dt_obs = [d.strftime("%Y-%m-%d") for d in chart_df['日期']]
+                    dt_breaks = [d for d in dt_all.strftime("%Y-%m-%d").tolist() if not d in dt_obs]
+                    fig.update_xaxes(rangebreaks=[dict(values=dt_breaks)])
+
+                    st.plotly_chart(fig, use_container_width=True)
                 else:
-                    st.warning("清洗後無有效歷史資料可繪製 K 線圖。")
+                    st.warning("無歷史資料可繪製 K 線圖。")
             
             stock_hist = df[(df['代號'] == sel_code) & (df['日期'] <= target_date)].head(30)
             
@@ -737,7 +677,6 @@ else:
                         st.success(f"**✅ 條件 5：連續 {cond5_q} 季 EPS >= {cond5_eps}**")
                         st.write(f"🔹 近 {cond5_q} 季 EPS 明細：`{eps_str}`")
 
-                # 💡 防護 int(NaN) 報錯
                 if use_cond6 or True:
                     today_i = stock_hist.iloc[0]['主力淨買超(張)'] if '主力淨買超(張)' in stock_hist.columns else 0
                     past_inst = stock_hist['主力淨買超(張)'].head(cond6_days).tolist() if '主力淨買超(張)' in stock_hist.columns else []
